@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="fr">
+    <head>
+        <meta charset="UTF-8">
+        <title>Grist Publipostage</title>
+        <link rel="stylesheet" href="style.css">
+
+        <script src="inc/grist-plugin-api.js"></script>
+        <script src="inc/pizzip.js"></script>
+        <script src="inc/pizzip-utils.js"></script>
+        <script src="inc/docxtemplater.js"></script>
+        <script src="inc/jszip.js"></script>
+        <script src="inc/FileSaver.js"></script>
+        <script src="inc/pdf-lib.js"></script>
+        <script src="inc/docx-preview.js"></script>
+    </head>
+    <body>
+        <div class="container">
+            <h2>Publipostage</h2>
+
+            <h3>Remarques et contraintes</h3>
+            <ul>
+                <li>Les colonnes Grist doivent correspondre aux balises Word (ex: {Nom}).</li>
+            </ul>
+
+            <div id="templateHeader" class="template-header" style="display:none;">
+                <div class="current-file-info">
+                    <span id="headerFileName">Nom du fichier.docx</span>
+                </div>
+                <button id="btnToggleUpload" class="btn-small">Modifier</button>
+            </div>
+
+            <div id="uploadContainer" class="section upload-section">
+                <label for="templateFile" class="custom-file-upload">
+                    Choisir le fichier modèle (.docx ou .pdf)
+                </label>
+                <input type="file" id="templateFile" accept=".docx, .doc, .pdf" />
+                <div id="fileName" class="file-name">Aucun fichier sélectionné</div>
+            </div>
+
+            <div class="section actions">
+                <button id="btnSingle" class="btn primary" disabled>
+                    Télécharger (Ligne sélectionnée)
+                </button>
+                <button id="btnBulk" class="btn secondary" disabled>
+                    Générer ZIP (Toutes les lignes)
+                </button>
+            </div>
+
+            <div id="status" class="status"></div>
+
+            <h3>Prévisualisation</h3>
+            <div id="preview-container" class="preview-container">
+                <div class="selectpreview">
+                    Sélectionner une ligne pour voir l'aperçu
+                </div>
+            </div>
+        </div>
+
+        <script src="docx-tools.js"></script>
+        <script src="pdf-tools.js"></script>
+        <script src="main.js"></script>
+    </body>
+</html>
