@@ -24,6 +24,7 @@ setTimeout(() => {
 
 grist.onRecord(async (record) => {
     state.currentRecord = record;
+    clearRelationsCache(); // les données liées ont pu changer
     updateUiState();
 
     // MAJ de la preview si on clique sur un enregistrement
@@ -34,6 +35,7 @@ grist.onRecord(async (record) => {
 
 grist.onRecords((records) => {
     state.allRecords = records;
+    clearRelationsCache(); // les données liées ont pu changer
     updateUiState();
 });
 
@@ -161,6 +163,14 @@ async function dispatchGeneration(rawData) {
     }
 
     if (state.templateType === 'docx') {
+        // Ajout des tables enfants liées si le modèle contient des balises
+        // {Table.Colonne} (voir relations-tools.js). En cas d'échec, le
+        // publipostage de base fonctionne toujours.
+        try {
+            await addChildTablesData(cleanData, rawData.id, state.templateBuffer);
+        } catch (e) {
+            console.warn("Publipostage relationnel indisponible", e);
+        }
         return generateDocxBlob(cleanData, state.templateBuffer);
     } else if (state.templateType === 'pdf') {
         return await generatePdfBlob(cleanData, state.templateBuffer);

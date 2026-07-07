@@ -9,6 +9,14 @@
 function generateDocxBlob(data, buffer) {
     const zip = new PizZip(buffer);
 
+    // Traduction des boucles {Table.Colonne} AVANT la sanitisation des clés
+    // (sinon le "." serait remplacé par "_" et la traduction échouerait)
+    try {
+        transformDottedLoops(zip);
+    } catch (e) {
+        console.warn("ATTENTION : La transformation des boucles relationnelles a échoué", e);
+    }
+
     try {
         sanitizeDocxXml(zip);
     } catch (e) {
@@ -57,7 +65,12 @@ function sanitizeDocxXml(zip) {
     /**
      * Fonction de sanitation comme pour les ID Grist
      */
-    xml = xml.replace(/\{(.*?)\}/g, (match, key) => `{${sanitizeKey(key)}}`);
+    xml = xml.replace(/\{(.*?)\}/g, (match, key) => {
+        if (key.startsWith('#') || key.startsWith('/')) {
+            return match; // marqueurs de boucle {#Table}/{/Table}, à préserver
+        }
+        return `{${sanitizeKey(key)}}`;
+    });
 
     zip.file(xmlFile, xml);
 }
