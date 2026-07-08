@@ -30,6 +30,14 @@ const DOTTED_TAG_SRC = '\\{([A-Za-z0-9_]+)\\.([A-Za-z0-9_À-ÿ]+)\\}';
 // lors d'un export ZIP.
 const relationsCache = new Map();
 
+// Avertissements de la dernière construction de données (tables citées dans le
+// modèle mais sans lien vers la table du widget). Affichés dans le statut.
+let relationsWarnings = [];
+
+function getRelationsWarnings() {
+    return relationsWarnings;
+}
+
 function clearRelationsCache() {
     relationsCache.clear();
 }
@@ -128,6 +136,7 @@ async function fetchChildRows(childTable, childCol, isList, parentId) {
 // Complète les données du parent avec les tables enfants citées dans le modèle :
 // data devient { champs_du_parent..., Membres: [ {..}, {..} ], ... }
 async function addChildTablesData(data, parentId, buffer) {
+    relationsWarnings = [];
     const used = getReferencedTables(buffer);
     if (used.length === 0) {
         return data; // aucune balise {Table.Colonne} -> aucun fetch
@@ -141,7 +150,11 @@ async function addChildTablesData(data, parentId, buffer) {
         if (!link) {
             // Pas une table enfant liée : on ne touche pas aux données. Un
             // {#Champ} peut être une section conditionnelle sur un champ parent.
-            console.warn(`"${table}" ne référence pas la table "${cible}" (aucune colonne Ref:/RefList:) — ignoré.`);
+            if (!(table in data)) {
+                const msg = `"${table}" ne référence pas la table "${cible}" (aucune colonne Ref:/RefList:, ou nom mal orthographié).`;
+                console.warn(msg);
+                relationsWarnings.push(msg);
+            }
             continue;
         }
         data[table] = await fetchChildRows(link.table, link.column, link.isList, parentId);
@@ -163,10 +176,14 @@ function dottedTablesIn(fragment) {
 // Traduction de syntaxe au moment de générer :
 // - {Membres.Col} dans une ligne de tableau -> {#Membres}{Col}...{/Membres}
 //   enroulant toute la ligne, pour que docxtemplater répète la ligne.
-// - {Membres.Col} hors tableau -> le paragraphe entier est répété pour chaque
-//   enfant (paragraphes marqueurs {#Membres}/{/Membres} + paragraphLoop).
+// - {Membres.Col} ailleurs (hors tableau, cellule unique, tableau imbriqué) ->
+//   le paragraphe entier est répété (marqueurs + paragraphLoop).
+// SEULES les tables réellement résolues dans `data` sont transformées : une
+// balise pointée non résolue reste visible dans le document au lieu de faire
+// disparaître silencieusement la ligne/le paragraphe (et les balises simples
+// comme {EEE} qui s'y trouvent).
 // ⚠ À appeler AVANT la sanitisation des clés (sinon le "." devient "_").
-function transformDottedLoops(zip) {
+function transformDottedLoops(zip, data) {
     const file = zip.file("word/document.xml");
     if (!file) {
         return;
@@ -174,35 +191,44 @@ function transformDottedLoops(zip) {
     // même réparation que sanitizeDocxXml (balises éclatées par Word)
     let xml = repairDocxXml(file.asText());
 
-    // 1) Lignes de tableau contenant des balises pointées : la ligne est répétée
-    xml = xml.replace(/<w:tr\b[\s\S]*?<\/w:tr>/g, (row) => {
-        const tablesInRow = dottedTablesIn(row);
+    const estResolue = (t) => data && Array.isArray(data[t]);
+    const enBoucle = (fragment, table) => fragment.replace(
+        new RegExp(`\\{${table}\\.([A-Za-z0-9_À-ÿ]+)\\}`, 'g'),
+        '{$1}'
+    );
+
+    // 1) Lignes de tableau LES PLUS INTERNES (le garde-fou (?!<\/?w:tr[ >])
+    //    empêche d'enjamber un tableau imbriqué) d'au moins 2 cellules : la
+    //    ligne est répétée. Avec 1 seule cellule, docxtemplater répéterait le
+    //    contenu bout à bout au lieu de la ligne -> passe 2.
+    xml = xml.replace(/<w:tr[ >](?:(?!<\/?w:tr[ >])[\s\S])*?<\/w:tr>/g, (row) => {
+        const tablesInRow = dottedTablesIn(row).filter(estResolue);
         if (tablesInRow.length === 0) {
             return row; // ligne normale, on ne touche pas
+        }
+        const cellules = (row.match(/<w:tc[ >]/g) || []).length;
+        if (cellules < 2) {
+            return row; // cellule unique : répétition de paragraphe (passe 2)
         }
         if (tablesInRow.length > 1) {
             console.warn("Plusieurs tables enfants dans la même ligne, seule la première est répétée :", tablesInRow);
         }
         const table = tablesInRow[0];
 
-        // {Table.Col} -> {Col} (on entre dans le contexte de la boucle)
-        let newRow = row.replace(
-            new RegExp(`\\{${table}\\.([A-Za-z0-9_À-ÿ]+)\\}`, 'g'),
-            '{$1}'
-        );
-        // Enrouler la ligne : {#table} dans le 1er nœud texte, {/table} dans le dernier.
+        // {Table.Col} -> {Col} puis enrouler la ligne : {#table} dans le 1er
+        // nœud texte, {/table} dans le dernier.
         // (?:\s[^>]*)? cible uniquement <w:t>, pas <w:tr>/<w:tc>/<w:tbl>...
-        newRow = newRow
+        return enBoucle(row, table)
             .replace(/(<w:t(?:\s[^>]*)?>)/, `$1{#${table}}`)
             .replace(/(<\/w:t>)(?![\s\S]*<\/w:t>)/, `{/${table}}$1`);
-        return newRow;
     });
 
-    // 2) Balises pointées restantes (hors tableau) : le paragraphe est répété
-    //    pour chaque enfant. Les paragraphes des lignes traitées en 1) ne
-    //    contiennent plus de balise pointée, ils ne matchent donc pas.
-    xml = xml.replace(/<w:p\b[\s\S]*?<\/w:p>/g, (para) => {
-        const tablesInPara = dottedTablesIn(para);
+    // 2) Balises pointées restantes : le paragraphe est répété pour chaque
+    //    enfant (valable hors tableau comme dans une cellule). Le garde-fou
+    //    (?!<w:p[ />]) évite d'enjamber un autre paragraphe, et l'ouverture
+    //    <w:p(?:\s...)?> exclut les paragraphes vides auto-fermés <w:p/>.
+    xml = xml.replace(/<w:p(?:\s[^>]*)?>(?:(?!<w:p[ />])[\s\S])*?<\/w:p>/g, (para) => {
+        const tablesInPara = dottedTablesIn(para).filter(estResolue);
         if (tablesInPara.length === 0) {
             return para;
         }
@@ -211,14 +237,10 @@ function transformDottedLoops(zip) {
         }
         const table = tablesInPara[0];
 
-        const newPara = para.replace(
-            new RegExp(`\\{${table}\\.([A-Za-z0-9_À-ÿ]+)\\}`, 'g'),
-            '{$1}'
-        );
         // paragraphes marqueurs : avec paragraphLoop, docxtemplater les retire
         // et répète le paragraphe central pour chaque enregistrement enfant
         return `<w:p><w:r><w:t>{#${table}}</w:t></w:r></w:p>`
-            + newPara
+            + enBoucle(para, table)
             + `<w:p><w:r><w:t>{/${table}}</w:t></w:r></w:p>`;
     });
 

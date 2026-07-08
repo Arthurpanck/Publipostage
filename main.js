@@ -119,7 +119,7 @@ document.getElementById('btnSingle').addEventListener('click', async () => {
     try {
         const blob = await dispatchGeneration(state.currentRecord);
         saveAs(blob, `Document_${state.currentRecord.id || 'export'}.${state.templateType}`);
-        setStatus("Téléchargement terminé", "success");
+        setStatusWithWarnings("Téléchargement terminé");
     } catch (error) {
         console.error(error);
         setStatus("Erreur: " + error.message, "error");
@@ -144,7 +144,7 @@ document.getElementById('btnBulk').addEventListener('click', async () => {
         }
         const content = await zip.generateAsync({type: "blob"});
         saveAs(content, "Publipostage.zip");
-        setStatus("ZIP créé avec succès", "success");
+        setStatusWithWarnings("ZIP créé avec succès");
     } catch (error) {
         console.error(error);
         setStatus("Erreur ZIP: " + error.message, "error");
@@ -230,6 +230,17 @@ function setStatus(msg, type) {
     if(statusElement) {
         statusElement.textContent = msg;
         statusElement.className = 'status ' + (type || '');
+    }
+}
+
+// Statut de succès, complété des avertissements du publipostage relationnel
+// (ex : table citée dans le modèle mais sans lien vers la table du widget)
+function setStatusWithWarnings(msg) {
+    const avertissements = (typeof getRelationsWarnings === 'function') ? getRelationsWarnings() : [];
+    if (avertissements.length > 0) {
+        setStatus(msg + " — Attention : " + avertissements.join(" "), "error");
+    } else {
+        setStatus(msg, "success");
     }
 }
 
