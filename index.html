@@ -21,7 +21,7 @@
             <h3>Remarques et contraintes</h3>
             <ul>
                 <li>Les colonnes Grist doivent correspondre aux balises Word (ex: {Nom}).</li>
-                <li>Tableau lié (.docx uniquement) : {Table.Colonne} dans une ligne de tableau répète la ligne pour chaque enregistrement de la table enfant lié à la ligne courante (colonne Ref/RefList vers la table du widget).</li>
+                <li>Données liées (.docx uniquement) : {Table.Colonne} affiche les enregistrements de la table enfant liés à la ligne courante (colonne Ref/RefList vers la table du widget). Dans une ligne de tableau, la ligne est répétée ; hors tableau, le paragraphe est répété. Syntaxe manuelle possible : {#Table}{Colonne}{/Table}.</li>
             </ul>
 
             <div id="templateHeader" class="template-header" style="display:none;">
