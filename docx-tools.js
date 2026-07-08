@@ -10,9 +10,10 @@ function generateDocxBlob(data, buffer) {
     const zip = new PizZip(buffer);
 
     // Traduction des boucles {Table.Colonne} AVANT la sanitisation des clés
-    // (sinon le "." serait remplacé par "_" et la traduction échouerait)
+    // (sinon le "." serait remplacé par "_" et la traduction échouerait).
+    // `data` sert à ne transformer que les tables réellement résolues.
     try {
-        transformDottedLoops(zip);
+        transformDottedLoops(zip, data);
     } catch (e) {
         console.warn("ATTENTION : La transformation des boucles relationnelles a échoué", e);
     }
