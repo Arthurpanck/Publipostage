@@ -192,6 +192,11 @@ async function updatePreview() {
             const pdfUrl = URL.createObjectURL(blob);
             container.innerHTML = `<iframe src="${pdfUrl}" width="100%" height="100%" style="border:none;"></iframe>`;
         }
+        // Diagnostic : signale les balises du modèle sans colonne correspondante
+        const avertissements = collectWarnings();
+        if (avertissements.length > 0) {
+            setStatus("Attention : " + avertissements.join(" "), "error");
+        }
     } catch (e) {
         console.error("Erreur Preview :", e);
         container.innerHTML = `<div style="color:red; padding:20px">Erreur de chargement de l'aperçu : ${e.message}</div>`;
@@ -233,10 +238,27 @@ function setStatus(msg, type) {
     }
 }
 
-// Statut de succès, complété des avertissements du publipostage relationnel
-// (ex : table citée dans le modèle mais sans lien vers la table du widget)
+// Avertissements du dernier rendu : tables citées sans lien + balises sans
+// colonne correspondante (avec rappel des colonnes réellement disponibles)
+function collectWarnings() {
+    const avertissements = ((typeof getRelationsWarnings === 'function') ? getRelationsWarnings() : []).slice();
+    const inconnues = (typeof getUnknownTags === 'function') ? getUnknownTags() : [];
+    if (inconnues.length > 0) {
+        let msg = "Balises sans colonne correspondante : {" + inconnues.join("}, {") + "}.";
+        if (state.currentRecord) {
+            const colonnes = Object.keys(state.currentRecord)
+                .filter(k => !k.startsWith('__') && k !== 'id')
+                .map(k => sanitizeKey(k));
+            msg += " Colonnes disponibles : " + colonnes.join(", ") + ".";
+        }
+        avertissements.push(msg);
+    }
+    return avertissements;
+}
+
+// Statut de succès, complété des avertissements du publipostage
 function setStatusWithWarnings(msg) {
-    const avertissements = (typeof getRelationsWarnings === 'function') ? getRelationsWarnings() : [];
+    const avertissements = collectWarnings();
     if (avertissements.length > 0) {
         setStatus(msg + " — Attention : " + avertissements.join(" "), "error");
     } else {

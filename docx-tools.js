@@ -5,9 +5,19 @@
  * Gestion des fichiers Word (.docx)
  */
 
+// Balises du dernier rendu n'ayant trouvé AUCUNE colonne correspondante
+// (faute de frappe, libellé au lieu de l'identifiant de colonne...).
+// Affichées dans la barre de statut pour diagnostiquer les "champs vides".
+let lastUnknownTags = [];
+
+function getUnknownTags() {
+    return lastUnknownTags;
+}
+
 // Génération du docx
 function generateDocxBlob(data, buffer) {
     const zip = new PizZip(buffer);
+    lastUnknownTags = [];
 
     // Traduction des boucles {Table.Colonne} AVANT la sanitisation des clés
     // (sinon le "." serait remplacé par "_" et la traduction échouerait).
@@ -24,11 +34,31 @@ function generateDocxBlob(data, buffer) {
         console.warn("ATTENTION : Le nettoyage automatique du XML a échoué", e);
     }
 
+    // Clés connues : champs du parent + colonnes des tables enfants,
+    // pour distinguer "cellule vide" (normal) de "balise sans colonne" (erreur)
+    const connues = new Set(Object.keys(data || {}));
+    for (const cle of Object.keys(data || {})) {
+        const valeur = data[cle];
+        if (Array.isArray(valeur) && valeur.length > 0 && typeof valeur[0] === 'object' && valeur[0] !== null) {
+            Object.keys(valeur[0]).forEach((col) => connues.add(col));
+        }
+    }
+    const inconnues = new Set();
+
     let doc;
     try {
         doc = new window.docxtemplater(zip, {
             paragraphLoop: true,
             linebreaks: true,
+            // Par défaut docxtemplater écrit le texte "undefined" quand une
+            // balise n'a pas de valeur. On rend une chaîne vide à la place,
+            // et on mémorise les balises sans colonne pour les signaler.
+            nullGetter: function (part) {
+                if (!part.module && part.value && !connues.has(part.value)) {
+                    inconnues.add(part.value);
+                }
+                return "";
+            },
         });
     } catch(error) {
         handleDocxError(error);
@@ -40,6 +70,7 @@ function generateDocxBlob(data, buffer) {
     } catch (error) {
         handleDocxError(error);
     }
+    lastUnknownTags = [...inconnues];
 
     return doc.getZip().generate({
         type: "blob",
@@ -65,7 +96,9 @@ function repairDocxXml(xml) {
     // reconstruction d'une balise "{" restée ouverte en fin de run : on fusionne
     // le run suivant (avec ses éventuels <w:rPr> et signets intercalés) jusqu'à
     // ce que la balise soit recollée, en gardant la mise en forme du 1er run
-    const splitTag = /(\{[^{}<]*)<\/w:t><\/w:r>(?:<w:bookmark(?:Start|End)[^>]*\/>)*<w:r\b[^>]*>(?:<w:rPr>[\s\S]*?<\/w:rPr>)?<w:t[^>]*>/g;
+    // (?:\s[^>]*)? cible uniquement <w:t>/<w:t attr...>, jamais <w:tab/> ni
+    // d'autres éléments, pour ne pas produire de XML imbriqué invalide
+    const splitTag = /(\{[^{}<]*)<\/w:t><\/w:r>(?:<w:bookmark(?:Start|End)[^>]*\/>)*<w:r\b[^>]*>(?:<w:rPr>[\s\S]*?<\/w:rPr>)?<w:t(?:\s[^>]*)?>/g;
     let avant;
     do {
         avant = xml;
