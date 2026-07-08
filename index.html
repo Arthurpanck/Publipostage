@@ -21,6 +21,7 @@
             <h3>Remarques et contraintes</h3>
             <ul>
                 <li>Les colonnes Grist doivent correspondre aux balises Word (ex: {Nom}).</li>
+                <li>Tableau lié (.docx uniquement) : {Table.Colonne} dans une ligne de tableau répète la ligne pour chaque enregistrement de la table enfant lié à la ligne courante (colonne Ref/RefList vers la table du widget).</li>
             </ul>
 
             <div id="templateHeader" class="template-header" style="display:none;">
@@ -57,6 +58,7 @@
             </div>
         </div>
 
+        <script src="relations-tools.js"></script>
         <script src="docx-tools.js"></script>
         <script src="pdf-tools.js"></script>
         <script src="main.js"></script>
