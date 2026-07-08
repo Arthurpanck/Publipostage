@@ -46,6 +46,33 @@ function generateDocxBlob(data, buffer) {
     });
 }
 
+/**
+ * Réparation du XML Word : retire les marqueurs du correcteur et recolle les
+ * balises {..} que Word a éclatées sur plusieurs "runs". Word fragmente une
+ * balise dès qu'on l'édite (runs avec propriétés <w:rPr>, rsid), qu'un mot est
+ * souligné par le correcteur (<w:proofErr>) ou que le curseur y a laissé un
+ * signet (_GoBack). Sans réparation, la balise n'est pas reconnue et la
+ * sanitisation avale le XML entre "{" et le "}" suivant, cassant le document.
+ */
+function repairDocxXml(xml) {
+    // Suppression des balises de correction orthographique et de grammaire
+    xml = xml.replace(/<w:proofErr[^>]*\/>/g, "");
+    xml = xml.replace(/<w:lang[^>]*\/>/g, "");
+    xml = xml.replace(/<w:noProof[^>]*\/>/g, "");
+    // reconstruction des balises cassées entre deux runs simples adjacents
+    xml = xml.replace(/<\/w:t><\/w:r><w:r[^>]*><w:t[^>]*>/g, "");
+    // reconstruction d'une balise "{" restée ouverte en fin de run : on fusionne
+    // le run suivant (avec ses éventuels <w:rPr> et signets intercalés) jusqu'à
+    // ce que la balise soit recollée, en gardant la mise en forme du 1er run
+    const splitTag = /(\{[^{}<]*)<\/w:t><\/w:r>(?:<w:bookmark(?:Start|End)[^>]*\/>)*<w:r\b[^>]*>(?:<w:rPr>[\s\S]*?<\/w:rPr>)?<w:t[^>]*>/g;
+    let avant;
+    do {
+        avant = xml;
+        xml = xml.replace(splitTag, "$1");
+    } while (xml !== avant);
+    return xml;
+}
+
 // Nettoyage des docxs
 function sanitizeDocxXml(zip) {
     const xmlFile = "word/document.xml";
@@ -53,14 +80,7 @@ function sanitizeDocxXml(zip) {
         return;
     }
 
-    let xml = zip.file(xmlFile).asText();
-
-    // Suppression des balises de correction orthographique et de grammaire
-    xml = xml.replace(/<w:proofErr[^>]*\/>/g, "");
-    xml = xml.replace(/<w:lang[^>]*\/>/g, "");
-    xml = xml.replace(/<w:noProof[^>]*\/>/g, "");
-    // reconstruction des balises cassées
-    xml = xml.replace(/<\/w:t><\/w:r><w:r[^>]*><w:t[^>]*>/g, "");
+    let xml = repairDocxXml(zip.file(xmlFile).asText());
 
     /**
      * Fonction de sanitation comme pour les ID Grist
