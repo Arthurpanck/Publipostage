@@ -9,9 +9,14 @@
 // (faute de frappe, libellé au lieu de l'identifiant de colonne...).
 // Affichées dans la barre de statut pour diagnostiquer les "champs vides".
 let lastUnknownTags = [];
+let lastKnownKeys = [];
 
 function getUnknownTags() {
     return lastUnknownTags;
+}
+
+function getKnownKeys() {
+    return lastKnownKeys;
 }
 
 // Génération du docx
@@ -71,6 +76,7 @@ function generateDocxBlob(data, buffer) {
         handleDocxError(error);
     }
     lastUnknownTags = [...inconnues];
+    lastKnownKeys = [...connues].filter((k) => !Array.isArray(data && data[k]));
 
     return doc.getZip().generate({
         type: "blob",

@@ -162,6 +162,15 @@ async function dispatchGeneration(rawData) {
         }
     }
 
+    // Ajout des colonnes masquées du widget (non reçues via grist.onRecord) :
+    // la ligne complète est relue dans la table pour que TOUTES les colonnes
+    // soient publipostables, même celles ajoutées après la création du widget.
+    try {
+        await completeParentData(cleanData, rawData.id);
+    } catch (e) {
+        console.warn("Complément des colonnes indisponible", e);
+    }
+
     if (state.templateType === 'docx') {
         // Ajout des tables enfants liées si le modèle contient des balises
         // {Table.Colonne} (voir relations-tools.js). En cas d'échec, le
@@ -245,10 +254,13 @@ function collectWarnings() {
     const inconnues = (typeof getUnknownTags === 'function') ? getUnknownTags() : [];
     if (inconnues.length > 0) {
         let msg = "Balises sans colonne correspondante : {" + inconnues.join("}, {") + "}.";
-        if (state.currentRecord) {
-            const colonnes = Object.keys(state.currentRecord)
+        let colonnes = (typeof getKnownKeys === 'function') ? getKnownKeys() : [];
+        if (colonnes.length === 0 && state.currentRecord) {
+            colonnes = Object.keys(state.currentRecord)
                 .filter(k => !k.startsWith('__') && k !== 'id')
                 .map(k => sanitizeKey(k));
+        }
+        if (colonnes.length > 0) {
             msg += " Colonnes disponibles : " + colonnes.join(", ") + ".";
         }
         avertissements.push(msg);

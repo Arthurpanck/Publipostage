@@ -133,6 +133,33 @@ async function fetchChildRows(childTable, childCol, isList, parentId) {
     return lignes;
 }
 
+// Complète les données du parent avec les colonnes ABSENTES du record reçu
+// par grist.onRecord : Grist n'envoie au widget que ses "colonnes visibles",
+// donc une colonne ajoutée à la table APRÈS la création du widget est masquée
+// et manquerait au publipostage. On relit la ligne complète via fetchTable.
+// Les valeurs déjà présentes (décodées par Grist) restent prioritaires.
+async function completeParentData(data, rowId) {
+    try {
+        const tableId = await grist.getSelectedTableId();
+        const tbl = await fetchTableCached(tableId);
+        const idx = tbl.id.indexOf(rowId);
+        if (idx === -1) {
+            return;
+        }
+        for (const col in tbl) {
+            if (col === 'id' || col.startsWith('manualSort') || col.startsWith('gristHelper_')) {
+                continue;
+            }
+            const cle = sanitizeKey(col);
+            if (!(cle in data)) {
+                data[cle] = tbl[col][idx];
+            }
+        }
+    } catch (e) {
+        console.warn("Impossible de compléter les colonnes masquées du widget", e);
+    }
+}
+
 // Complète les données du parent avec les tables enfants citées dans le modèle :
 // data devient { champs_du_parent..., Membres: [ {..}, {..} ], ... }
 async function addChildTablesData(data, parentId, buffer) {
