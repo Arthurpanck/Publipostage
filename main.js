@@ -1,8 +1,8 @@
 /**
  * MAIN CONTROLLER
- * Version : 1.5
- * maintainer : dieux.alexandre@gmail.com
- * Objet : Gestion de l'interface, des événements Grist et de l'orchestration des événements
+ * Version : 2.0
+ * Objet : événements Grist, orchestration de la génération (docx/pdf) et
+ * pilotage de la vue (ui.js). Ne manipule pas le DOM directement.
  */
 
 let state = {
@@ -17,6 +17,12 @@ grist.ready({
     requiredAccess: 'full'
 });
 
+initUi({
+    onPickFile: handleTemplateUpload,
+    onDownloadLine: downloadSingle,
+    onDownloadZip: downloadBulk,
+});
+
 // Lancement différé du chargement du template car plante parfois si pas de timeout
 setTimeout(() => {
     loadSavedTemplate();
@@ -25,7 +31,7 @@ setTimeout(() => {
 grist.onRecord(async (record) => {
     state.currentRecord = record;
     clearRelationsCache(); // les données liées ont pu changer
-    updateUiState();
+    updateActionsState();
 
     // MAJ de la preview si on clique sur un enregistrement
     if (state.currentRecord && state.templateBuffer) {
@@ -36,38 +42,11 @@ grist.onRecord(async (record) => {
 grist.onRecords((records) => {
     state.allRecords = records;
     clearRelationsCache(); // les données liées ont pu changer
-    updateUiState();
+    updateActionsState();
 });
 
-document.getElementById('btnToggleUpload').addEventListener('click', function() {
-    toggleUploadSection(true);
-});
-
-function toggleUploadSection(showUpload) {
-    const header = document.getElementById('templateHeader');
-    const container = document.getElementById('uploadContainer');
-    const headerName = document.getElementById('headerFileName');
-
-    if (showUpload) {
-        header.style.display = 'none';
-        container.classList.remove('hidden');
-    } else {
-        header.style.display = 'flex';
-        container.classList.add('hidden');
-
-        if(state.templateName) {
-            headerName.textContent = state.templateName;
-        }
-    }
-}
-
-// Upload du Template
-document.getElementById('templateFile').addEventListener('change', async function(e) {
-    const file = e.target.files[0];
-    if (!file) {
-        return;
-    }
-
+// Upload du Template (fichier choisi via la modale ou la roue crantée)
+async function handleTemplateUpload(file) {
     // Validation extension
     let type = null;
     if (file.name.endsWith('.docx') || file.name.endsWith('.doc')) {
@@ -75,13 +54,12 @@ document.getElementById('templateFile').addEventListener('change', async functio
     } else if (file.name.endsWith('.pdf')) {
         type = 'pdf';
     } else {
-        setStatus("Format non supporté. Utilisez .docx ou .pdf", "error");
+        uiToast("Format non supporté. Utilisez .docx ou .pdf", "error");
         return;
     }
 
-    setStatus("Upload et sauvegarde du template...", "normal");
+    uiToast("Upload et sauvegarde du template...", "normal");
 
-    // Gestion du template
     try {
         const buffer = await readFileAsBuffer(file);
 
@@ -97,41 +75,43 @@ document.getElementById('templateFile').addEventListener('change', async functio
         // Vérification si le fichier est bien sauvegardé
         const checkId = await grist.getOption('templateId');
         if (checkId != attachmentId) {
-            setStatus("Attention, cliquer sur 'Enregistrer' en haut de la page !", "error");
+            uiToast("Attention, cliquer sur 'Enregistrer' en haut de la page !", "error");
             return;
         }
 
         updateTemplateState(buffer, file.name, type);
-        setStatus("Template sauvegardé", "success");
+        uiCloseModal();
+        uiToast("Modèle sauvegardé", "success");
 
     } catch (err) {
         console.error(err);
-        setStatus("Erreur lors de la sauvegarde : " + err.message, "error");
+        uiToast("Erreur lors de la sauvegarde : " + err.message, "error");
     }
-});
+}
 
-// Single export
-document.getElementById('btnSingle').addEventListener('click', async () => {
+// Export de la ligne sélectionnée
+async function downloadSingle() {
     if (!state.currentRecord || !state.templateBuffer) {
         return;
     }
-    setStatus("Génération du document", "normal");
+    uiToast("Génération du document...", "normal");
     try {
         const blob = await dispatchGeneration(state.currentRecord);
         saveAs(blob, `Document_${state.currentRecord.id || 'export'}.${state.templateType}`);
-        setStatusWithWarnings("Téléchargement terminé");
+        refreshWarnings();
+        uiToast("Téléchargement terminé", "success");
     } catch (error) {
         console.error(error);
-        setStatus("Erreur: " + error.message, "error");
+        uiToast("Erreur : " + error.message, "error");
     }
-});
+}
 
-// Mass export
-document.getElementById('btnBulk').addEventListener('click', async () => {
+// Export en masse (ZIP)
+async function downloadBulk() {
     if (!state.allRecords.length || !state.templateBuffer) {
         return;
     }
-    setStatus(`Génération du ZIP (${state.allRecords.length} fichiers)`, "normal");
+    uiToast(`Génération du ZIP (${state.allRecords.length} fichiers)...`, "normal");
     try {
         const zip = new JSZip();
         for (const row of state.allRecords) {
@@ -144,14 +124,15 @@ document.getElementById('btnBulk').addEventListener('click', async () => {
         }
         const content = await zip.generateAsync({type: "blob"});
         saveAs(content, "Publipostage.zip");
-        setStatusWithWarnings("ZIP créé avec succès");
+        refreshWarnings();
+        uiToast("ZIP créé avec succès", "success");
     } catch (error) {
         console.error(error);
-        setStatus("Erreur ZIP: " + error.message, "error");
+        uiToast("Erreur ZIP : " + error.message, "error");
     }
-});
+}
 
-// --- LOGIQUE MÉTIER - Gestion des clés - dispatcher en fonction du type de template - prévisualisation - sanitizer ---
+// --- LOGIQUE MÉTIER : nettoyage des clés + dispatch selon le type de modèle ---
 async function dispatchGeneration(rawData) {
     // retrait des metadatas Grist
     const cleanData = {};
@@ -186,30 +167,36 @@ async function dispatchGeneration(rawData) {
     }
 }
 
-// Prévisualisation documents
+// Prévisualisation du document pour la ligne sélectionnée
 async function updatePreview() {
     const container = document.getElementById('preview-container');
-    if(!container) {
+    if (!container) {
         return;
     }
 
     try {
         const blob = await dispatchGeneration(state.currentRecord);
         if (state.templateType === 'docx') {
-            docx.renderAsync(blob, container, null, { className: "docx_viewer", inWrapper: true, ignoreWidth: false });
+            await docx.renderAsync(blob, container, null, { className: "docx_viewer", inWrapper: true, ignoreWidth: false });
         } else if (state.templateType === 'pdf') {
             const pdfUrl = URL.createObjectURL(blob);
-            container.innerHTML = `<iframe src="${pdfUrl}" width="100%" height="100%" style="border:none;"></iframe>`;
+            container.innerHTML = `<iframe src="${pdfUrl}"></iframe>`;
         }
-        // Diagnostic : signale les balises du modèle sans colonne correspondante
-        const avertissements = collectWarnings();
-        if (avertissements.length > 0) {
-            setStatus("Attention : " + avertissements.join(" "), "error");
-        }
+        uiShowPreview(true);
+        refreshWarnings();
     } catch (e) {
         console.error("Erreur Preview :", e);
-        container.innerHTML = `<div style="color:red; padding:20px">Erreur de chargement de l'aperçu : ${e.message}</div>`;
+        uiShowPreview(false);
+        uiPreviewEmptyText("Erreur de chargement de l'aperçu");
+        uiToast("Erreur d'aperçu : " + e.message, "error");
     }
+}
+
+// Alimente la pastille "N balises sans correspondance" de l'en-tête
+function refreshWarnings() {
+    const tags = (typeof getUnknownTags === 'function') ? getUnknownTags() : [];
+    const notes = (typeof getRelationsWarnings === 'function') ? getRelationsWarnings() : [];
+    uiSetWarnings(tags, notes);
 }
 
 function sanitizeKey(keytoSanitize) {
@@ -224,68 +211,21 @@ function sanitizeKey(keytoSanitize) {
     return sanitize;
 }
 
-function updateUiState() {
+function updateActionsState() {
     const ready = state.templateBuffer !== null;
-    const hasRecord = state.currentRecord !== null;
-    const hasRecords = state.allRecords.length > 0;
-
-    const btnSingle = document.getElementById('btnSingle');
-    const btnBulk = document.getElementById('btnBulk');
-    if(btnSingle) {
-        btnSingle.disabled = !ready || !hasRecord;
-    }
-    if(btnBulk) {
-        btnBulk.disabled = !ready || !hasRecords;
-    }
+    uiEnableActions(ready && state.currentRecord !== null, ready && state.allRecords.length > 0);
 }
 
-function setStatus(msg, type) {
-    const statusElement = document.getElementById('status');
-    if(statusElement) {
-        statusElement.textContent = msg;
-        statusElement.className = 'status ' + (type || '');
-    }
-}
-
-// Avertissements du dernier rendu : tables citées sans lien + balises sans
-// colonne correspondante (avec rappel des colonnes réellement disponibles)
-function collectWarnings() {
-    const avertissements = ((typeof getRelationsWarnings === 'function') ? getRelationsWarnings() : []).slice();
-    const inconnues = (typeof getUnknownTags === 'function') ? getUnknownTags() : [];
-    if (inconnues.length > 0) {
-        let msg = "Balises sans colonne correspondante : {" + inconnues.join("}, {") + "}.";
-        let colonnes = (typeof getKnownKeys === 'function') ? getKnownKeys() : [];
-        if (colonnes.length === 0 && state.currentRecord) {
-            colonnes = Object.keys(state.currentRecord)
-                .filter(k => !k.startsWith('__') && k !== 'id')
-                .map(k => sanitizeKey(k));
-        }
-        if (colonnes.length > 0) {
-            msg += " Colonnes disponibles : " + colonnes.join(", ") + ".";
-        }
-        avertissements.push(msg);
-    }
-    return avertissements;
-}
-
-// Statut de succès, complété des avertissements du publipostage
-function setStatusWithWarnings(msg) {
-    const avertissements = collectWarnings();
-    if (avertissements.length > 0) {
-        setStatus(msg + " — Attention : " + avertissements.join(" "), "error");
-    } else {
-        setStatus(msg, "success");
-    }
-}
-
-// Récupère le template sauvegardé au chargement de la page
+// Récupère le template sauvegardé au chargement de la page.
+// Modèle configuré -> on le charge sans modale ; sinon la modale
+// d'instructions s'affiche automatiquement (premier chargement).
 async function loadSavedTemplate() {
     try {
         const templateId = await grist.getOption('templateId');
         const templateName = await grist.getOption('templateName');
 
         if (templateId && templateName) {
-            setStatus("Récupération du template", "normal");
+            uiToast("Récupération du modèle...", "normal");
             let type = 'docx';
             if (templateName.endsWith('.pdf')) {
                 type = 'pdf';
@@ -293,16 +233,13 @@ async function loadSavedTemplate() {
 
             const buffer = await downloadAttachmentFromGrist(templateId);
             updateTemplateState(buffer, templateName, type);
-            setStatus("Template chargé : " + templateName, "success");
-
-            toggleUploadSection(false);
+            uiToast("Modèle chargé : " + templateName, "success");
         } else {
-            setStatus("Aucun template configuré.", "normal");
-
-            toggleUploadSection(true);
+            uiOpenModal();
         }
     } catch (e) {
         console.warn("Erreur chargement", e);
+        uiOpenModal();
     }
 }
 
@@ -354,18 +291,15 @@ function updateTemplateState(buffer, name, type) {
     state.templateType = type;
     state.templateName = name;
 
-    // Mise à jour de l'affichage (affichage du nom de fichier sauvegardé
-    const nameEl = document.getElementById('fileName');
-    if(nameEl) {
-        nameEl.textContent = name + " (Sauvegardé)";
-    }
-
-    updateUiState();
+    clearRelationsCache();
+    uiSetTemplate(name);
+    updateActionsState();
 
     // Rafraichissement de l'aperçu
     if (state.currentRecord) {
         updatePreview();
+    } else {
+        uiShowPreview(false);
+        uiPreviewEmptyText("Sélectionner une ligne pour voir l'aperçu");
     }
-
-    toggleUploadSection(false);
 }

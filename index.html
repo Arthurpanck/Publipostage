@@ -2,6 +2,7 @@
 <html lang="fr">
     <head>
         <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>Grist Publipostage</title>
         <link rel="stylesheet" href="style.css">
 
@@ -15,52 +16,154 @@
         <script src="inc/docx-preview.js"></script>
     </head>
     <body>
-        <div class="container">
-            <h2>Publipostage</h2>
+        <input type="file" id="templateFile" accept=".docx, .doc, .pdf" hidden>
 
-            <h3>Remarques et contraintes</h3>
-            <ul>
-                <li>Les colonnes Grist doivent correspondre aux balises Word (ex: {Nom}).</li>
-                <li>Données liées (.docx uniquement) : {Table.Colonne} affiche les enregistrements de la table enfant liés à la ligne courante (colonne Ref/RefList vers la table du widget). Dans une ligne de tableau, la ligne est répétée ; hors tableau, le paragraphe est répété. Syntaxe manuelle possible : {#Table}{Colonne}{/Table}.</li>
-            </ul>
+        <div class="app">
 
-            <div id="templateHeader" class="template-header" style="display:none;">
-                <div class="current-file-info">
-                    <span id="headerFileName">Nom du fichier.docx</span>
+            <!-- ── MODALE INSTRUCTIONS ─────────────────────────────── -->
+            <div id="modalOverlay" class="modal-overlay" hidden>
+                <div class="modal-card">
+                    <div class="modal-header">
+                        <div class="modal-title">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#000091" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                            <h3>Instructions</h3>
+                        </div>
+                        <button id="modalClose" class="modal-close" hidden>×</button>
+                    </div>
+
+                    <div class="modal-body">
+                        <ul class="modal-list">
+                            <li>Rendre visible toutes les colonnes dans le paramétrage "personnalisé" de la vue publipostage</li>
+                        </ul>
+                        <div class="modal-hint">
+                            <p>Dans le paramétrage de la colonne, c'est la valeur préfixée de <code>$</code> qu'il faut reprendre pour créer la balise dans votre document word ou PDF&nbsp;:</p>
+                            <div class="modal-hint-demo">
+                                <div class="modal-hint-caption">Label et id de la colonne</div>
+                                <div class="modal-hint-label">Numéro</div>
+                                <div class="modal-hint-id">$Numero</div>
+                            </div>
+                        </div>
+                        <ul class="modal-list">
+                            <li>Pour publiposter les colonnes de la table principale, ajouter dans votre document word ou pdf&nbsp;<code>{NomColonne}</code></li>
+                            <li>Pour publiposter les colonnes des tables liées (via colonne de référence), ajouter dans votre document word&nbsp;<code>{NomTable.NomColonne}</code></li>
+                        </ul>
+                    </div>
+
+                    <div class="modal-upload">
+                        <div id="dropzone" class="dropzone">
+                            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#000091" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="12" y1="18" x2="12" y2="12"></line><line x1="9" y1="15" x2="15" y2="15"></line></svg>
+                            <p id="dropzoneMain" class="dropzone-main">Déposer le modèle ici</p>
+                            <p id="dropzoneSub" class="dropzone-sub">.docx ou .pdf</p>
+                            <button id="btnBrowse" class="btn btn-primary btn-browse">Parcourir…</button>
+                        </div>
+                    </div>
+
+                    <div class="modal-footer">
+                        <button id="modalFooterBtn" class="btn btn-muted">Passer</button>
+                    </div>
                 </div>
-                <button id="btnToggleUpload" class="btn-small">Modifier</button>
             </div>
 
-            <div id="uploadContainer" class="section upload-section">
-                <label for="templateFile" class="custom-file-upload">
-                    Choisir le fichier modèle (.docx ou .pdf)
-                </label>
-                <input type="file" id="templateFile" accept=".docx, .doc, .pdf" />
-                <div id="fileName" class="file-name">Aucun fichier sélectionné</div>
-            </div>
+            <!-- ── EN-TÊTE (54px) ──────────────────────────────────── -->
+            <div id="appHeader" class="hdr">
 
-            <div class="section actions">
-                <button id="btnSingle" class="btn primary" disabled>
-                    Télécharger (Ligne sélectionnée)
-                </button>
-                <button id="btnBulk" class="btn secondary" disabled>
-                    Générer ZIP (Toutes les lignes)
-                </button>
-            </div>
+                <h2 id="hdrTitle" class="hdr-title">Publipostage</h2>
+                <div id="hdrTitleSep" class="hdr-sep"></div>
 
-            <div id="status" class="status"></div>
-
-            <h3>Prévisualisation</h3>
-            <div id="preview-container" class="preview-container">
-                <div class="selectpreview">
-                    Sélectionner une ligne pour voir l'aperçu
+                <!-- Pastille "N balises sans correspondance" -->
+                <div id="warnSlot" class="warn-slot" hidden>
+                    <div id="warnChip" class="warn-chip">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                        <span id="warnLabel"></span>
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    </div>
+                    <div id="warnMenu" class="warn-menu" hidden>
+                        <div class="warn-menu-intro">Ces balises du modèle ne correspondent à aucune colonne des données. Elles resteront vides dans le document généré.</div>
+                        <div id="warnMenuList" class="warn-menu-list"></div>
+                    </div>
                 </div>
+                <div id="warnSep" class="hdr-sep" hidden></div>
+
+                <!-- Actions : wrapper flex:1 entre deux séparateurs, boutons 50/50 -->
+                <div id="actionsInline" class="hdr-actions" hidden>
+                    <button id="btnSingle" class="btn btn-success hdr-action" disabled>
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        <span id="btnSingleLabel">Ligne sélectionnée</span>
+                    </button>
+                    <button id="btnBulk" class="btn btn-primary hdr-action" disabled>
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        <span id="btnBulkLabel">ZIP (toutes les lignes)</span>
+                    </button>
+                </div>
+                <div id="actionsSpacer" class="hdr-spacer" hidden></div>
+                <div id="actionsSep" class="hdr-sep" hidden></div>
+
+                <!-- Chip du modèle + roue crantée -->
+                <div id="templateSlot" class="tpl-slot" hidden>
+                    <div class="tpl-chip">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#000091" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+                        <span id="tplName"></span>
+                    </div>
+                    <button id="btnGear" class="gear-btn" title="Options du modèle">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                    </button>
+
+                    <div id="gearMenu" class="gear-menu" hidden>
+                        <div id="gearActions" hidden>
+                            <button id="gearDownloadLine" class="gear-item gear-item-line">
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#18753c" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                                Télécharger la ligne sélectionnée
+                            </button>
+                            <button id="gearDownloadZip" class="gear-item gear-item-zip">
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#000091" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                                Générer le ZIP
+                            </button>
+                            <div class="gear-sep"></div>
+                        </div>
+                        <button id="gearChangeTemplate" class="gear-item">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#000091" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                            Changer de modèle
+                        </button>
+                        <div class="gear-sep"></div>
+                        <button id="gearInstructions" class="gear-item">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#000091" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                            Voir les instructions
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Aucun modèle chargé -->
+                <div id="noTemplateSlot" class="notpl-slot" hidden>
+                    <div class="hdr-spacer"></div>
+                    <span class="notpl-text">Aucun modèle chargé</span>
+                    <button id="btnLoadTemplate" class="btn btn-primary">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                        Charger un modèle
+                    </button>
+                </div>
+
             </div>
+
+            <!-- ── PRÉVISUALISATION (héro) ─────────────────────────── -->
+            <div class="preview-zone">
+                <div id="previewScroll" class="preview-scroll" hidden>
+                    <div id="preview-container" class="preview-page"></div>
+                </div>
+                <div id="previewEmpty" class="preview-empty">
+                    <div>
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="#c0c0c0" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>
+                        <p id="previewEmptyText">La prévisualisation apparaîtra ici</p>
+                    </div>
+                </div>
+                <div id="toast" class="toast" hidden></div>
+            </div>
+
         </div>
 
         <script src="relations-tools.js"></script>
         <script src="docx-tools.js"></script>
         <script src="pdf-tools.js"></script>
+        <script src="ui.js"></script>
         <script src="main.js"></script>
     </body>
 </html>
