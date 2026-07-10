@@ -100,10 +100,17 @@ function initUi(handlers) {
         if (uiRaf) cancelAnimationFrame(uiRaf);
         uiRaf = requestAnimationFrame(uiMeasureLevel);
     };
+    let fitRaf = null;
+    const refit = () => {
+        if (fitRaf) cancelAnimationFrame(fitRaf);
+        fitRaf = requestAnimationFrame(uiFitPreview);
+    };
     if (typeof ResizeObserver !== 'undefined') {
         new ResizeObserver(remeasure).observe($('appHeader'));
+        new ResizeObserver(refit).observe($('previewScroll'));
     } else {
         window.addEventListener('resize', remeasure);
+        window.addEventListener('resize', refit);
     }
 
     uiRender();
@@ -148,6 +155,66 @@ function uiSetWarnings(tags, notes) {
 function uiShowPreview(visible) {
     $('previewScroll').hidden = !visible;
     $('previewEmpty').hidden = visible;
+    if (visible) {
+        uiFitPreview();
+        // seconde passe après stabilisation de la mise en page (polices, images)
+        requestAnimationFrame(uiFitPreview);
+    }
+}
+
+// Ajuste la prévisualisation à la largeur disponible : la page garde ses
+// proportions réelles (A4...) et est réduite par transform:scale pour tenir
+// dans le widget, souvent affiché sur une demi-largeur d'écran. Le wrapper
+// .preview-fit reçoit la taille APRÈS échelle (un transform ne modifie pas
+// la boîte de mise en page, sinon la zone de scroll garderait la taille
+// naturelle). Recalculé à chaque redimensionnement.
+function uiFitPreview() {
+    const scroll = $('previewScroll');
+    const fit = $('previewFit');
+    const page = $('preview-container');
+    if (!scroll || !fit || !page || scroll.hidden) {
+        return;
+    }
+
+    // PDF : l'iframe s'étire simplement sur toute la largeur disponible
+    if (page.querySelector('iframe')) {
+        fit.classList.add('pdf');
+        fit.style.width = '';
+        fit.style.height = '';
+        page.style.transform = '';
+        page.style.width = '';
+        return;
+    }
+    fit.classList.remove('pdf');
+
+    // mesure à l'échelle 1 (largeur naturelle de la plus large des pages)
+    page.style.transform = '';
+    page.style.width = '';
+    fit.style.width = '';
+    fit.style.height = '';
+    let naturalW = 0;
+    page.querySelectorAll('.docx_viewer').forEach((section) => {
+        naturalW = Math.max(naturalW, section.offsetWidth);
+    });
+    if (!naturalW) {
+        naturalW = page.offsetWidth;
+    }
+    if (!naturalW) {
+        return;
+    }
+    const naturalH = page.getBoundingClientRect().height;
+
+    const stylesZone = getComputedStyle(scroll);
+    const avail = scroll.clientWidth
+        - parseFloat(stylesZone.paddingLeft) - parseFloat(stylesZone.paddingRight);
+    const scale = Math.min(1, avail / naturalW);
+
+    page.style.width = naturalW + 'px';
+    if (scale < 1) {
+        page.style.transform = 'scale(' + scale + ')';
+        fit.style.width = (naturalW * scale) + 'px';
+        fit.style.height = (naturalH * scale) + 'px';
+    }
 }
 
 function uiPreviewEmptyText(text) {

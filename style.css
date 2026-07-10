@@ -391,7 +391,13 @@ code {
     justify-content: center;
     padding: 24px 20px;
 }
-.preview-page { flex-shrink: 0; max-width: 100%; }
+/* Ajustement dynamique : la page garde ses proportions réelles et est mise
+   à l'échelle (transform) par uiFitPreview() pour tenir dans la largeur du
+   widget — jamais de défilement horizontal. .preview-fit porte la taille
+   APRÈS échelle (le transform ne modifie pas la boîte de mise en page). */
+.preview-fit { flex-shrink: 0; max-width: 100%; }
+.preview-fit.pdf { width: 100%; }
+.preview-page { transform-origin: top left; }
 /* Le rendu docx-preview gère ses propres pages : on neutralise son fond
    gris pour laisser celui de la zone, et on applique l'ombre du design */
 .preview-page .docx_viewer-wrapper {
@@ -403,8 +409,7 @@ code {
     margin-bottom: 24px;
 }
 .preview-page iframe {
-    width: 70vw;
-    max-width: 100%;
+    width: 100%;
     height: calc(100vh - 54px - 48px);
     border: none;
     box-shadow: var(--ombre-page);
