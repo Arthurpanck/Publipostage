@@ -17,7 +17,7 @@
  *   - DOCX uniquement (un PDF à formulaire ne peut pas agrandir un tableau).
  *   - Une seule table enfant par ligne de tableau répétée.
  *   - Si la table enfant a plusieurs colonnes Ref vers le parent, la première
- *     trouvée est utilisée.
+ *     trouvée est utilisée et un avertissement indique le choix.
  *   - Les valeurs encodées (dates = nombre, refs = id) sont affichées brutes.
  */
 
@@ -44,7 +44,13 @@ function clearRelationsCache() {
 
 function fetchTableCached(tableId) {
     if (!relationsCache.has(tableId)) {
-        relationsCache.set(tableId, grist.docApi.fetchTable(tableId));
+        const pending = grist.docApi.fetchTable(tableId).catch(error => {
+            // Ne pas conserver un échec réseau, ni effacer une requête plus
+            // récente démarrée après clearRelationsCache().
+            if (relationsCache.get(tableId) === pending) relationsCache.delete(tableId);
+            throw error;
+        });
+        relationsCache.set(tableId, pending);
     }
     return relationsCache.get(tableId);
 }
@@ -171,7 +177,8 @@ async function addChildTablesData(data, parentId, buffer) {
     const refs = await findTablesReferencing(cible);
 
     for (const table of used) {
-        const link = refs.find(r => r.table === table);
+        const links = refs.filter(r => r.table === table);
+        const link = links[0];
         if (!link) {
             // Pas une table enfant liée : on ne touche pas aux données. Un
             // {#Champ} peut être une section conditionnelle sur un champ parent.
@@ -182,7 +189,14 @@ async function addChildTablesData(data, parentId, buffer) {
             }
             continue;
         }
-        data[table] = await fetchChildRows(link.table, link.column, link.isList, parentId);
+        if (links.length > 1) {
+            relationsWarnings.push(`"${table}" possède plusieurs liens vers "${cible}" : ${links.map(r => r.column).join(', ')}. Le lien "${link.column}" est utilisé.`);
+        }
+        try {
+            data[table] = await fetchChildRows(link.table, link.column, link.isList, parentId);
+        } catch (error) {
+            throw new Error(`Impossible de lire la table liée "${table}" : ${error.message}`);
+        }
     }
     return data;
 }

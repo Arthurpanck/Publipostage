@@ -162,13 +162,9 @@ async function dispatchGeneration(rawData) {
 
     if (state.templateType === 'docx') {
         // Ajout des tables enfants liées si le modèle contient des balises
-        // {Table.Colonne} (voir relations-tools.js). En cas d'échec, le
-        // publipostage de base fonctionne toujours.
-        try {
-            await addChildTablesData(cleanData, rawData.id, state.templateBuffer);
-        } catch (e) {
-            console.warn("Publipostage relationnel indisponible", e);
-        }
+        // {Table.Colonne} (voir relations-tools.js). Une lecture échouée doit
+        // interrompre l'export, sinon il serait annoncé réussi mais incomplet.
+        await addChildTablesData(cleanData, rawData.id, state.templateBuffer);
         return generateDocxBlob(cleanData, state.templateBuffer);
     } else if (state.templateType === 'pdf') {
         return await generatePdfBlob(cleanData, state.templateBuffer);

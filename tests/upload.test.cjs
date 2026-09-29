@@ -50,3 +50,11 @@ test('le format binaire .doc est refusé avec une consigne de conversion', async
     assert.equal(events.includes('upload'), false);
     assert.match(events.at(-1).message, /Enregistrez le fichier en .docx/);
 });
+
+test('un échec de lecture des tables liées bloque la génération au lieu de produire un document incomplet', async () => {
+    const { app } = controller();
+    app.completeParentData = async () => {};
+    app.addChildTablesData = async () => { throw new Error('Accès à Enfants indisponible'); };
+    app.updateTemplateState(template(app, para('{Enfants.Nom}')), 'relations.docx', 'docx');
+    await assert.rejects(app.dispatchGeneration({ id: 1, Titre: 'Parent' }), /Accès à Enfants indisponible/);
+});

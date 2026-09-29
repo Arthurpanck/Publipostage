@@ -34,3 +34,17 @@ pas un test de persistance avec le vrai service Grist.
 
 Les filtres Grist peuvent exclure une ligne sélectionnée dans la table source.
 Vérifier leur configuration avant de conclure à une erreur de sélection.
+
+## Relations
+
+Les tests simulent les réponses Grist (Ref, RefList, métadonnées), puis passent
+les données dans le vrai moteur DOCX. Ils couvrent le filtrage des enfants,
+les parents sans enfant, les boucles manuelles, le cache par lot, les erreurs
+réseau et les liens ambigus. Ils ne valident pas les permissions ni les
+événements du service Grist réel.
+
+Pour un test manuel, utiliser une table Enfants avec une colonne Parent
+de type Référence vers la table du widget et un modèle `{Enfants.Nom}`.
+Vérifier deux parents avec des enfants distincts, puis un parent sans enfant.
+Recommencer avec Parent de type Liste de références et un enfant partagé.
+Comparer l’aperçu, le document individuel et les documents du ZIP.
