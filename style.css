@@ -358,6 +358,15 @@ code {
 .gear-item-zip { color: var(--bleu); }
 .gear-sep { height: 1px; background: var(--bordure); }
 
+/* Même au dernier palier, garder la roue accessible dans un widget étroit.
+   Seuls les libellés se tronquent ; les menus restent libres de déborder. */
+.hdr .warn-slot { min-width: 0; max-width: 55%; flex-shrink: 1; }
+.hdr .warn-chip, .hdr .tpl-slot, .hdr .tpl-chip { min-width: 0; flex-shrink: 1; }
+.hdr .warn-chip svg, .hdr .tpl-chip svg { flex-shrink: 0; }
+#tplName, #warnLabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.warn-menu { min-width: min(260px, calc(100vw - 28px)); max-width: min(320px, calc(100vw - 28px)); }
+.gear-menu { min-width: min(220px, calc(100vw - 28px)); }
+
 /* Aucun modèle chargé */
 .notpl-slot { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
 .notpl-text { font-size: 12.5px; color: var(--texte-3); font-style: italic; white-space: nowrap; }

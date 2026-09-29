@@ -19,25 +19,26 @@ function getKnownKeys() {
     return lastKnownKeys;
 }
 
+// Même compilation à l'import et à la génération : un modèle invalide ne doit
+// pas remplacer le dernier modèle utilisable dans les options Grist.
+function compileDocxTemplate(buffer, data, nullGetter) {
+    try {
+        const zip = new PizZip(buffer);
+        // Résoudre les balises pointées avant de nettoyer les identifiants.
+        transformDottedLoops(zip, data);
+        sanitizeDocxXml(zip);
+        const options = { paragraphLoop: true, linebreaks: true };
+        if (nullGetter) options.nullGetter = nullGetter;
+        return new window.docxtemplater(zip, options);
+    } catch (error) {
+        handleDocxError(error);
+    }
+}
+
 // Génération du docx
 function generateDocxBlob(data, buffer) {
-    const zip = new PizZip(buffer);
     lastUnknownTags = [];
-
-    // Traduction des boucles {Table.Colonne} AVANT la sanitisation des clés
-    // (sinon le "." serait remplacé par "_" et la traduction échouerait).
-    // `data` sert à ne transformer que les tables réellement résolues.
-    try {
-        transformDottedLoops(zip, data);
-    } catch (e) {
-        console.warn("ATTENTION : La transformation des boucles relationnelles a échoué", e);
-    }
-
-    try {
-        sanitizeDocxXml(zip);
-    } catch (e) {
-        console.warn("ATTENTION : Le nettoyage automatique du XML a échoué", e);
-    }
+    lastKnownKeys = [];
 
     // Clés connues : champs du parent + colonnes des tables enfants,
     // pour distinguer "cellule vide" (normal) de "balise sans colonne" (erreur)
@@ -50,24 +51,13 @@ function generateDocxBlob(data, buffer) {
     }
     const inconnues = new Set();
 
-    let doc;
-    try {
-        doc = new window.docxtemplater(zip, {
-            paragraphLoop: true,
-            linebreaks: true,
-            // Par défaut docxtemplater écrit le texte "undefined" quand une
-            // balise n'a pas de valeur. On rend une chaîne vide à la place,
-            // et on mémorise les balises sans colonne pour les signaler.
-            nullGetter: function (part) {
-                if (!part.module && part.value && !connues.has(part.value)) {
-                    inconnues.add(part.value);
-                }
-                return "";
-            },
-        });
-    } catch(error) {
-        handleDocxError(error);
-    }
+    // Une cellule vide est normale ; une balise sans colonne est signalée.
+    const doc = compileDocxTemplate(buffer, data, (part) => {
+        if (!part.module && part.value && !connues.has(part.value)) {
+            inconnues.add(part.value);
+        }
+        return "";
+    });
 
     try {
         // Ajout de la données custom
@@ -84,55 +74,67 @@ function generateDocxBlob(data, buffer) {
     });
 }
 
-/**
- * Réparation du XML Word : retire les marqueurs du correcteur et recolle les
- * balises {..} que Word a éclatées sur plusieurs "runs". Word fragmente une
- * balise dès qu'on l'édite (runs avec propriétés <w:rPr>, rsid), qu'un mot est
- * souligné par le correcteur (<w:proofErr>) ou que le curseur y a laissé un
- * signet (_GoBack). Sans réparation, la balise n'est pas reconnue et la
- * sanitisation avale le XML entre "{" et le "}" suivant, cassant le document.
- */
-function repairDocxXml(xml) {
-    // Suppression des balises de correction orthographique et de grammaire
-    xml = xml.replace(/<w:proofErr[^>]*\/>/g, "");
-    xml = xml.replace(/<w:lang[^>]*\/>/g, "");
-    xml = xml.replace(/<w:noProof[^>]*\/>/g, "");
-    // reconstruction des balises cassées entre deux runs simples adjacents
-    xml = xml.replace(/<\/w:t><\/w:r><w:r[^>]*><w:t[^>]*>/g, "");
-    // reconstruction d'une balise "{" restée ouverte en fin de run : on fusionne
-    // le run suivant (avec ses éventuels <w:rPr> et signets intercalés) jusqu'à
-    // ce que la balise soit recollée, en gardant la mise en forme du 1er run
-    // (?:\s[^>]*)? cible uniquement <w:t>/<w:t attr...>, jamais <w:tab/> ni
-    // d'autres éléments, pour ne pas produire de XML imbriqué invalide
-    const splitTag = /(\{[^{}<]*)<\/w:t><\/w:r>(?:<w:bookmark(?:Start|End)[^>]*\/>)*<w:r\b[^>]*>(?:<w:rPr>[\s\S]*?<\/w:rPr>)?<w:t(?:\s[^>]*)?>/g;
-    let avant;
-    do {
-        avant = xml;
-        xml = xml.replace(splitTag, "$1");
-    } while (xml !== avant);
-    return xml;
+// Toutes les parties Word contenant du texte (pas les propriétés/métadonnées).
+function docxTextFiles(zip) {
+    return zip.file(/^word\/(?:document|header[0-9]*|footer[0-9]*|footnotes|endnotes)\.xml$/);
 }
 
-// Nettoyage des docxs
-function sanitizeDocxXml(zip) {
-    const xmlFile = "word/document.xml";
-    if (!zip.file(xmlFile)) {
-        return;
-    }
-
-    let xml = repairDocxXml(zip.file(xmlFile).asText());
-
-    /**
-     * Fonction de sanitation comme pour les ID Grist
-     */
-    xml = xml.replace(/\{(.*?)\}/g, (match, key) => {
-        if (key.startsWith('#') || key.startsWith('/')) {
-            return match; // marqueurs de boucle {#Table}/{/Table}, à préserver
+/**
+ * Recolle uniquement le TEXTE des balises, sans fusionner les runs Word.
+ * Le texte voisin conserve donc sa mise en forme, les signets et le XML.
+ * Une balise ne traverse jamais un paragraphe, une tabulation ou un saut.
+ * Les doubles accolades équilibrées sont un alias de la syntaxe historique.
+ * Les accolades mal appariées restent intactes pour le diagnostic du moteur.
+ */
+function repairDocxXml(xml) {
+    return xml.replace(/<w:p(?:\s[^>]*)?>(?:(?!<w:p[ />])[\s\S])*?<\/w:p>/g, (paragraph) => {
+        const nodes = [];
+        let text = '';
+        const parts = /<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>|<w:(?:tab|br|cr|drawing|object)\b[^>]*\/?>/g;
+        let part;
+        while ((part = parts.exec(paragraph)) !== null) {
+            if (part[1] === undefined) {
+                text += '\0';
+                continue;
+            }
+            nodes.push({ start: part.index + part[0].indexOf('>') + 1,
+                offset: text.length, length: part[1].length, text: part[1] });
+            text += part[1];
         }
-        return `{${sanitizeKey(key)}}`;
+        const tags = [...text.matchAll(/\{\{([^{}\0]+)\}\}|\{([^{}\0]+)\}/g)];
+        // De droite à gauche : les offsets des balises précédentes restent valides.
+        for (const tag of tags.reverse()) {
+            const start = tag.index, end = start + tag[0].length;
+            if (text[start - 1] === '{' || text[end] === '}') continue;
+            const replacement = '{' + (tag[1] || tag[2]).trim() + '}';
+            for (const node of nodes) {
+                const from = Math.max(start - node.offset, 0);
+                const to = Math.min(end - node.offset, node.length);
+                if (from >= to) continue;
+                node.text = node.text.slice(0, from)
+                    + (start >= node.offset ? replacement : '') + node.text.slice(to);
+            }
+        }
+        for (const node of nodes.reverse()) {
+            paragraph = paragraph.slice(0, node.start) + node.text
+                + paragraph.slice(node.start + node.length);
+        }
+        return paragraph;
     });
+}
 
-    zip.file(xmlFile, xml);
+// Le nettoyage est limité aux nœuds texte : jamais au XML entre deux balises.
+function sanitizeDocxXml(zip) {
+    for (const file of docxTextFiles(zip)) {
+        const xml = repairDocxXml(file.asText()).replace(
+            /(<w:t(?:\s[^>]*)?>)([^<]*)(<\/w:t>)/g,
+            (_, open, text, close) => open + text.replace(/\{([^{}]+)\}/g, (match, key) => {
+                if (/^[#/^@=]/.test(key) || key === '.') return match;
+                return `{${sanitizeKey(key)}}`;
+            }) + close
+        );
+        zip.file(file.name, xml);
+    }
 }
 
 // Affichage des erreurs

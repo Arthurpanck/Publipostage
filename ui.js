@@ -287,6 +287,7 @@ function uiRender() {
     $('templateSlot').hidden = !s.hasTemplate;
     $('noTemplateSlot').hidden = s.hasTemplate;
     $('tplName').textContent = s.templateName;
+    $('tplName').title = s.templateName;
     $('gearMenu').hidden = !s.showGearMenu;
 
     uiSyncProbes();

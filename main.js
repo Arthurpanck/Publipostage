@@ -45,16 +45,18 @@ grist.onRecords((records) => {
     updateActionsState();
 });
 
+function getTemplateType(name) {
+    const extension = name.split('.').pop().toLowerCase();
+    return extension === 'docx' || extension === 'pdf' ? extension : null;
+}
+
 // Upload du Template (fichier choisi via la modale ou la roue crantée)
 async function handleTemplateUpload(file) {
-    // Validation extension
-    let type = null;
-    if (file.name.endsWith('.docx') || file.name.endsWith('.doc')) {
-        type = 'docx';
-    } else if (file.name.endsWith('.pdf')) {
-        type = 'pdf';
-    } else {
-        uiToast("Format non supporté. Utilisez .docx ou .pdf", "error");
+    const type = getTemplateType(file.name);
+    if (!type) {
+        uiToast(/\.doc$/i.test(file.name)
+            ? "Le format .doc n'est pas pris en charge. Enregistrez le fichier en .docx."
+            : "Format non supporté. Utilisez .docx ou .pdf", "error");
         return;
     }
 
@@ -62,6 +64,9 @@ async function handleTemplateUpload(file) {
 
     try {
         const buffer = await readFileAsBuffer(file);
+        // Valider avant tout upload ou changement des options persistées.
+        if (type === 'docx') compileDocxTemplate(buffer);
+        else await PDFLib.PDFDocument.load(buffer);
 
         const attachmentId = await uploadAttachmentToGrist(file);
         if (!attachmentId) {
@@ -69,8 +74,11 @@ async function handleTemplateUpload(file) {
         }
 
         // Sauvegarde des informations du template uploadé
-        await grist.setOption('templateId', attachmentId);
-        await grist.setOption('templateName', file.name);
+        await grist.setOptions({
+            ...await grist.getOptions(),
+            templateId: attachmentId,
+            templateName: file.name,
+        });
 
         // Vérification si le fichier est bien sauvegardé
         const checkId = await grist.getOption('templateId');
@@ -226,10 +234,8 @@ async function loadSavedTemplate() {
 
         if (templateId && templateName) {
             uiToast("Récupération du modèle...", "normal");
-            let type = 'docx';
-            if (templateName.endsWith('.pdf')) {
-                type = 'pdf';
-            }
+            const type = getTemplateType(templateName);
+            if (!type) throw new Error('Format du modèle sauvegardé non supporté.');
 
             const buffer = await downloadAttachmentFromGrist(templateId);
             updateTemplateState(buffer, templateName, type);

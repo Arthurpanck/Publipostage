@@ -57,13 +57,11 @@ function getReferencedTables(buffer) {
         return templateScanCache.tables;
     }
     const zip = new PizZip(buffer);
-    const file = zip.file("word/document.xml");
-    let tables = [];
-    if (file) {
+    const found = new Set();
+    for (const file of docxTextFiles(zip)) {
         // même réparation que la génération (balises éclatées par Word, correcteur...)
         const xml = repairDocxXml(file.asText());
 
-        const found = new Set();
         let m;
         const re = new RegExp(DOTTED_TAG_SRC, 'g');
         while ((m = re.exec(xml)) !== null) {
@@ -74,8 +72,8 @@ function getReferencedTables(buffer) {
         while ((m = loopRe.exec(xml)) !== null) {
             found.add(m[1]);
         }
-        tables = [...found];
     }
+    const tables = [...found];
     templateScanCache = { buffer: buffer, tables: tables };
     return tables;
 }
@@ -211,12 +209,12 @@ function dottedTablesIn(fragment) {
 // comme {EEE} qui s'y trouvent).
 // ⚠ À appeler AVANT la sanitisation des clés (sinon le "." devient "_").
 function transformDottedLoops(zip, data) {
-    const file = zip.file("word/document.xml");
-    if (!file) {
-        return;
+    for (const file of docxTextFiles(zip)) {
+        zip.file(file.name, transformDottedXml(repairDocxXml(file.asText()), data));
     }
-    // même réparation que sanitizeDocxXml (balises éclatées par Word)
-    let xml = repairDocxXml(file.asText());
+}
+
+function transformDottedXml(xml, data) {
 
     const estResolue = (t) => data && Array.isArray(data[t]);
     const enBoucle = (fragment, table) => fragment.replace(
@@ -271,5 +269,5 @@ function transformDottedLoops(zip, data) {
             + `<w:p><w:r><w:t>{/${table}}</w:t></w:r></w:p>`;
     });
 
-    zip.file("word/document.xml", xml);
+    return xml;
 }
