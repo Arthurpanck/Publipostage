@@ -12,6 +12,8 @@
  *     Hors tableau : le paragraphe est répété pour chaque enfant lié.
  *   - Boucle manuelle docxtemplater : {#Membres}{Nom_Membre}{/Membres}
  *     (le fetch des enfants est déclenché aussi par ces marqueurs).
+ *   - Depuis un regroupement Grist : {TableSource.Colonne} liste les lignes
+ *     désignées par sa colonne group, sans recalculer le regroupement.
  *
  * Limites connues :
  *   - DOCX uniquement (un PDF à formulaire ne peut pas agrandir un tableau).
@@ -74,7 +76,7 @@ function getReferencedTables(buffer) {
             found.add(m[1]);
         }
         // boucles explicites {#Table}...{/Table} écrites à la main dans le modèle
-        const loopRe = /\{#([A-Za-z0-9_]+)\}/g;
+        const loopRe = /\{[#^]([A-Za-z0-9_]+)\}/g;
         while ((m = loopRe.exec(xml)) !== null) {
             found.add(m[1]);
         }
@@ -125,16 +127,40 @@ async function fetchChildRows(childTable, childCol, isList, parentId) {
             return;
         }
 
-        const ligne = {};
-        for (const col in tbl) {
-            if (col === 'id' || col.startsWith('manualSort') || col.startsWith('gristHelper_')) {
-                continue;
-            }
-            ligne[sanitizeKey(col)] = tbl[col][i];
-        }
-        lignes.push(ligne);
+        lignes.push(relationRowData(tbl, i));
     });
     return lignes;
+}
+
+function relationRowData(tbl, index) {
+    const row = {};
+    for (const col in tbl) {
+        if (col === 'id' || col.startsWith('manualSort') || col.startsWith('gristHelper_')) continue;
+        row[sanitizeKey(col)] = tbl[col][index];
+    }
+    return row;
+}
+
+// Lire group dans la table, même si cette colonne est masquée dans le widget.
+// Les identifiants fournis par Grist sont la seule source d'appartenance au groupe.
+async function fetchSummaryRows(summaryTable, sourceTable, parentId) {
+    const summary = await fetchTableCached(summaryTable);
+    const index = summary.id.indexOf(parentId);
+    const group = index < 0 ? undefined : summary.group?.[index];
+    if (!Array.isArray(group) || group[0] !== 'L') {
+        throw new Error(`Le groupe sélectionné dans "${summaryTable}" est indisponible. Sélectionnez à nouveau une ligne.`);
+    }
+    const ids = group.slice(1);
+    if (!ids.every(id => Number.isInteger(id) && id > 0)) {
+        throw new Error(`La colonne group de "${summaryTable}" contient des références invalides.`);
+    }
+    if (!ids.length) return [];
+    const source = await fetchTableCached(sourceTable);
+    const indexes = new Map(source.id.map((id, i) => [id, i]));
+    return ids.map(id => {
+        if (!indexes.has(id)) throw new Error(`La ligne ${id} de "${sourceTable}" est introuvable ou inaccessible.`);
+        return relationRowData(source, indexes.get(id));
+    });
 }
 
 // Complète les données du parent avec les colonnes ABSENTES du record reçu
@@ -175,8 +201,15 @@ async function addChildTablesData(data, parentId, buffer) {
 
     const cible = await grist.getSelectedTableId(); // table du widget (le parent)
     const refs = await findTablesReferencing(cible);
+    const tables = await fetchTableCached('_grist_Tables');
+    const sourceRef = tables.summarySourceTable?.[tables.tableId.indexOf(cible)];
+    const summarySource = sourceRef ? tables.tableId[tables.id.indexOf(sourceRef)] : null;
 
     for (const table of used) {
+        if (table === summarySource) {
+            data[table] = await fetchSummaryRows(cible, table, parentId);
+            continue;
+        }
         const links = refs.filter(r => r.table === table);
         const link = links[0];
         if (!link) {

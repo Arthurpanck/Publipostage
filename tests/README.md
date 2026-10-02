@@ -48,3 +48,24 @@ de type Référence vers la table du widget et un modèle `{Enfants.Nom}`.
 Vérifier deux parents avec des enfants distincts, puis un parent sans enfant.
 Recommencer avec Parent de type Liste de références et un enfant partagé.
 Comparer l’aperçu, le document individuel et les documents du ZIP.
+
+## Regroupements Grist
+
+`tests/summary.test.cjs` simule la table récapitulative, son
+`summarySourceTable` et les références encodées de `group`, puis génère de
+vrais DOCX avec les bibliothèques embarquées. Les tests couvrent plusieurs
+groupes, une ligne partagée, le groupe vide, les tableaux, les en-têtes, les
+boucles manuelles, l’actualisation du cache et les références indisponibles.
+
+Dans Grist, sélectionner comme source du widget une table regroupée, puis
+utiliser `{Donnees.Titre}` dans le modèle si la table d’origine est Donnees.
+Le nom à utiliser est l’identifiant de la table source, pas celui de la table
+récapitulative. Les colonnes du groupe restent disponibles sous leur nom
+simple, par exemple `{count}`. La colonne `group` peut rester masquée.
+
+Pour la validation manuelle : sélectionner deux groupes successifs et
+comparer les lignes produites à celles du groupe dans Grist. Modifier le
+titre d’une ligne source sans changer les totaux puis relancer un export ;
+le nouveau titre doit apparaître. Vérifier aussi le ZIP, avec un document
+par ligne du regroupement transmise au widget. Les tests simulés ne
+remplacent pas ces vérifications sur le service Grist réel.

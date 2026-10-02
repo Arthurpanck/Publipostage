@@ -103,6 +103,7 @@ async function downloadSingle() {
         return;
     }
     uiToast("Génération du document...", "normal");
+    clearRelationsCache(); // relire les détails, même si les totaux du groupe n'ont pas changé
     try {
         const blob = await dispatchGeneration(state.currentRecord);
         saveAs(blob, `Document_${state.currentRecord.id || 'export'}.${state.templateType}`);
@@ -120,6 +121,7 @@ async function downloadBulk() {
         return;
     }
     uiToast(`Génération du ZIP (${state.allRecords.length} fichiers)...`, "normal");
+    clearRelationsCache(); // cache partagé uniquement à l'intérieur de ce lot
     try {
         const zip = new JSZip();
         for (const row of state.allRecords) {
