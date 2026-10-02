@@ -69,3 +69,20 @@ titre d’une ligne source sans changer les totaux puis relancer un export ;
 le nouveau titre doit apparaître. Vérifier aussi le ZIP, avec un document
 par ligne du regroupement transmise au widget. Les tests simulés ne
 remplacent pas ces vérifications sur le service Grist réel.
+
+## Vue du widget filtrée par une liaison
+
+Si le widget utilise BDD_SERVICES, la balise
+`{BDD_SERVICES.Service_commune_Prenom_Nom}` répète les lignes transmises
+à cette vue. Grist applique lui-même la liaison (référence ou regroupement),
+les filtres et le tri. Aucun filtre d’une autre vue indépendante n’est copié.
+La balise simple `{Service_commune_Prenom_Nom}` reste celle de la ligne
+sélectionnée. Le ZIP garde son fonctionnement par ligne : un modèle qui
+contient toute la vue y répétera cette liste dans chaque document.
+
+`tests/filtered-view.test.cjs` vérifie l’ordre, la restriction aux lignes
+transmises, les boucles, le cache, la vue vide et les erreurs de lecture.
+Pour vérifier dans Grist : brancher le widget sur la table détaillée,
+configurer sa liaison au sélecteur de commune ou au regroupement, puis
+changer le sélecteur sans cliquer sur chaque service. Comparer la liste
+publipostée aux lignes transmises au widget, puis tester un filtre et un tri.

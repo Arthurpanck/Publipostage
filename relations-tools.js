@@ -14,6 +14,8 @@
  *     (le fetch des enfants est déclenché aussi par ces marqueurs).
  *   - Depuis un regroupement Grist : {TableSource.Colonne} liste les lignes
  *     désignées par sa colonne group, sans recalculer le regroupement.
+ *   - Si TableSource est la table du widget : {TableSource.Colonne} liste
+ *     les lignes transmises au widget, avec les filtres et le tri Grist.
  *
  * Limites connues :
  *   - DOCX uniquement (un PDF à formulaire ne peut pas agrandir un tableau).
@@ -31,6 +33,7 @@ const DOTTED_TAG_SRC = '\\{([A-Za-z0-9_]+)\\.([A-Za-z0-9_À-ÿ]+)\\}';
 // de données périmées. Évite de re-télécharger la table enfant à chaque ligne
 // lors d'un export ZIP.
 const relationsCache = new Map();
+const selectedViewCacheKey = Symbol('selectedView');
 
 // Avertissements de la dernière construction de données (tables citées dans le
 // modèle mais sans lien vers la table du widget). Affichés dans le statut.
@@ -45,16 +48,29 @@ function clearRelationsCache() {
 }
 
 function fetchTableCached(tableId) {
-    if (!relationsCache.has(tableId)) {
-        const pending = grist.docApi.fetchTable(tableId).catch(error => {
+    return fetchRelationCached(tableId, () => grist.docApi.fetchTable(tableId));
+}
+
+function fetchRelationCached(key, fetcher) {
+    if (!relationsCache.has(key)) {
+        const pending = fetcher().catch(error => {
             // Ne pas conserver un échec réseau, ni effacer une requête plus
             // récente démarrée après clearRelationsCache().
-            if (relationsCache.get(tableId) === pending) relationsCache.delete(tableId);
+            if (relationsCache.get(key) === pending) relationsCache.delete(key);
             throw error;
         });
-        relationsCache.set(tableId, pending);
+        relationsCache.set(key, pending);
     }
-    return relationsCache.get(tableId);
+    return relationsCache.get(key);
+}
+
+// Grist applique la liaison (référence ou regroupement), les filtres et le tri.
+// Ne pas remplacer cette lecture par fetchTable : cela inclurait les lignes exclues.
+async function fetchSelectedViewRows() {
+    const tbl = await fetchRelationCached(selectedViewCacheKey, () => grist.fetchSelectedTable({
+        format: 'columns', includeColumns: 'normal', keepEncoded: false,
+    }));
+    return tbl.id.flatMap((id, i) => id === 'new' ? [] : [relationRowData(tbl, i)]);
 }
 
 // Quelles tables enfants sont réellement citées dans le modèle ?
@@ -200,12 +216,16 @@ async function addChildTablesData(data, parentId, buffer) {
     }
 
     const cible = await grist.getSelectedTableId(); // table du widget (le parent)
+    // Une balise portant le nom de la table du widget désigne sa vue filtrée.
+    if (used.includes(cible)) data[cible] = await fetchSelectedViewRows();
+    const related = used.filter(table => table !== cible);
+    if (!related.length) return data;
     const refs = await findTablesReferencing(cible);
     const tables = await fetchTableCached('_grist_Tables');
     const sourceRef = tables.summarySourceTable?.[tables.tableId.indexOf(cible)];
     const summarySource = sourceRef ? tables.tableId[tables.id.indexOf(sourceRef)] : null;
 
-    for (const table of used) {
+    for (const table of related) {
         if (table === summarySource) {
             data[table] = await fetchSummaryRows(cible, table, parentId);
             continue;

@@ -39,10 +39,12 @@ grist.onRecord(async (record) => {
     }
 });
 
-grist.onRecords((records) => {
+grist.onRecords(async (records) => {
     state.allRecords = records;
     clearRelationsCache(); // les données liées ont pu changer
     updateActionsState();
+    // Une liaison ou un filtre peut changer les lignes sans déplacer le curseur.
+    if (state.currentRecord && state.templateBuffer) await updatePreview();
 });
 
 function getTemplateType(name) {
