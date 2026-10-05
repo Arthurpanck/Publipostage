@@ -28,24 +28,26 @@ setTimeout(() => {
     loadSavedTemplate();
 }, 500);
 
+// Toutes les colonnes de la table, y compris celles masquées dans le widget :
+// elles restent publipostables sans avoir à les afficher.
+const RECORD_OPTIONS = { includeColumns: 'normal' };
+
 grist.onRecord(async (record) => {
     state.currentRecord = record;
-    clearRelationsCache(); // les données liées ont pu changer
     updateActionsState();
 
     // MAJ de la preview si on clique sur un enregistrement
     if (state.currentRecord && state.templateBuffer) {
         await updatePreview();
     }
-});
+}, RECORD_OPTIONS);
 
 grist.onRecords(async (records) => {
     state.allRecords = records;
-    clearRelationsCache(); // les données liées ont pu changer
     updateActionsState();
     // Une liaison ou un filtre peut changer les lignes sans déplacer le curseur.
     if (state.currentRecord && state.templateBuffer) await updatePreview();
-});
+}, RECORD_OPTIONS);
 
 function getTemplateType(name) {
     const extension = name.split('.').pop().toLowerCase();
@@ -105,11 +107,11 @@ async function downloadSingle() {
         return;
     }
     uiToast("Génération du document...", "normal");
-    clearRelationsCache(); // relire les détails, même si les totaux du groupe n'ont pas changé
+    const batch = newBatch();
     try {
-        const blob = await dispatchGeneration(state.currentRecord);
+        const blob = await dispatchGeneration(state.currentRecord, batch);
         saveAs(blob, `Document_${state.currentRecord.id || 'export'}.${state.templateType}`);
-        refreshWarnings();
+        showWarnings(batch);
         uiToast("Téléchargement terminé", "success");
     } catch (error) {
         console.error(error);
@@ -122,21 +124,21 @@ async function downloadBulk() {
     if (!state.allRecords.length || !state.templateBuffer) {
         return;
     }
-    uiToast(`Génération du ZIP (${state.allRecords.length} fichiers)...`, "normal");
-    clearRelationsCache(); // cache partagé uniquement à l'intérieur de ce lot
+    const batch = newBatch();
+    uiToast(`Génération du ZIP (${batch.viewRows.length} fichiers)...`, "normal");
     try {
         const zip = new JSZip();
-        for (const row of state.allRecords) {
+        for (const row of batch.viewRows) {
             if (row.id === 'new') {
                 continue;
             }
             const fileName = `Doc_${row.id}.${state.templateType}`;
-            const docBlob = await dispatchGeneration(row);
+            const docBlob = await dispatchGeneration(row, batch);
             zip.file(fileName, docBlob);
         }
         const content = await zip.generateAsync({type: "blob"});
         saveAs(content, "Publipostage.zip");
-        refreshWarnings();
+        showWarnings(batch);
         uiToast("ZIP créé avec succès", "success");
     } catch (error) {
         console.error(error);
@@ -144,55 +146,58 @@ async function downloadBulk() {
     }
 }
 
-// --- LOGIQUE MÉTIER : nettoyage des clés + dispatch selon le type de modèle ---
-async function dispatchGeneration(rawData) {
-    // retrait des metadatas Grist
-    const cleanData = {};
-    for (const key in rawData) {
-        if (!key.startsWith('__') && key !== 'id') {
-            const cleanKey = sanitizeKey(key);
-            cleanData[cleanKey] = rawData[key];
-        }
-    }
+// Un lot = un aperçu, un document ou un ZIP. Les tables lues, les lignes du
+// widget et les alertes lui appartiennent : rien à invalider entre deux lots,
+// et un événement Grist reçu pendant un ZIP ne modifie pas le lot en cours.
+function newBatch() {
+    return { cache: new Map(), viewRows: state.allRecords, unknownTags: new Set(), notes: new Set() };
+}
 
-    // Ajout des colonnes masquées du widget (non reçues via grist.onRecord) :
-    // la ligne complète est relue dans la table pour que TOUTES les colonnes
-    // soient publipostables, même celles ajoutées après la création du widget.
-    try {
-        await completeParentData(cleanData, rawData.id);
-    } catch (e) {
-        console.warn("Complément des colonnes indisponible", e);
-    }
+// --- LOGIQUE MÉTIER : nettoyage des clés + dispatch selon le type de modèle ---
+async function dispatchGeneration(record, batch) {
+    const data = rowData(record); // retrait des métadonnées Grist
 
     if (state.templateType === 'docx') {
-        // Ajout des tables enfants liées si le modèle contient des balises
-        // {Table.Colonne} (voir relations-tools.js). Une lecture échouée doit
-        // interrompre l'export, sinon il serait annoncé réussi mais incomplet.
-        await addChildTablesData(cleanData, rawData.id, state.templateBuffer);
-        return generateDocxBlob(cleanData, state.templateBuffer);
+        // Ajout des tables liées si le modèle contient des balises
+        // {Table.Colonne} (voir data-tools.js)
+        await addLinkedTables(data, record, getReferencedTables(state.templateBuffer), batch);
+        return generateDocxBlob(data, state.templateBuffer, batch.unknownTags);
     } else if (state.templateType === 'pdf') {
-        return await generatePdfBlob(cleanData, state.templateBuffer);
+        return await generatePdfBlob(data, state.templateBuffer);
     }
 }
 
 // Prévisualisation du document pour la ligne sélectionnée
+let previewRun = 0;
 async function updatePreview() {
     const container = document.getElementById('preview-container');
     if (!container) {
         return;
     }
 
+    // onRecord et onRecords peuvent relancer l'aperçu coup sur coup : le rendu
+    // se fait hors du DOM et seul l'aperçu le plus récent est affiché.
+    const run = ++previewRun;
+    const batch = newBatch();
     try {
-        const blob = await dispatchGeneration(state.currentRecord);
+        const blob = await dispatchGeneration(state.currentRecord, batch);
+        const page = document.createElement('div');
         if (state.templateType === 'docx') {
-            await docx.renderAsync(blob, container, null, { className: "docx_viewer", inWrapper: true, ignoreWidth: false });
+            await docx.renderAsync(blob, page, null, { className: "docx_viewer", inWrapper: true, ignoreWidth: false });
         } else if (state.templateType === 'pdf') {
             const pdfUrl = URL.createObjectURL(blob);
-            container.innerHTML = `<iframe src="${pdfUrl}"></iframe>`;
+            page.innerHTML = `<iframe src="${pdfUrl}"></iframe>`;
         }
+        if (run !== previewRun) {
+            return;
+        }
+        container.replaceChildren(...page.childNodes);
         uiShowPreview(true);
-        refreshWarnings();
+        showWarnings(batch);
     } catch (e) {
+        if (run !== previewRun) {
+            return;
+        }
         console.error("Erreur Preview :", e);
         uiShowPreview(false);
         uiPreviewEmptyText("Erreur de chargement de l'aperçu");
@@ -200,23 +205,9 @@ async function updatePreview() {
     }
 }
 
-// Alimente la pastille "N balises sans correspondance" de l'en-tête
-function refreshWarnings() {
-    const tags = (typeof getUnknownTags === 'function') ? getUnknownTags() : [];
-    const notes = (typeof getRelationsWarnings === 'function') ? getRelationsWarnings() : [];
-    uiSetWarnings(tags, notes);
-}
-
-function sanitizeKey(keytoSanitize) {
-    if (!keytoSanitize) {
-        return "";
-    }
-    let sanitize = keytoSanitize.toString();
-    sanitize = sanitize.normalize('NFKD');
-    sanitize = sanitize.replace(/[\u0300-\u036f]/g, ""); // Supprime les accents
-    sanitize = sanitize.replace(/[^a-zA-Z0-9_]+/g, "_"); // Remplace caractères spéciaux
-    sanitize = sanitize.replace(/^_+/, ""); // Supprime _ au début
-    return sanitize;
+// Alimente la pastille d'alerte de l'en-tête avec les alertes du lot
+function showWarnings(batch) {
+    uiSetWarnings([...batch.unknownTags], [...batch.notes]);
 }
 
 function updateActionsState() {
@@ -297,7 +288,6 @@ function updateTemplateState(buffer, name, type) {
     state.templateType = type;
     state.templateName = name;
 
-    clearRelationsCache();
     uiSetTemplate(name);
     updateActionsState();
 

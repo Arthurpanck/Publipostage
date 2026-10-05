@@ -1,7 +1,7 @@
 /**
  * PUBLIPOSTAGE — design "ergonomie et layout"
  * Tokens et composants issus du handoff design (README + prototype) :
- * prévisualisation centrale permanente, en-tête 54px responsive mesuré,
+ * prévisualisation centrale permanente, en-tête 54px responsive,
  * instructions en modale, pastille d'alerte des balises sans correspondance.
  */
 
@@ -145,7 +145,7 @@ code {
     gap: 6px;
 }
 .modal-hint {
-    margin: 12px 0;
+    margin: 0 0 12px;
     border: 1px solid var(--bordure);
     border-radius: var(--rayon);
     padding: 10px 12px;
@@ -222,15 +222,15 @@ code {
 .hdr-spacer { flex: 1; min-width: 8px; }
 
 /* Wrapper unique flex:1 entre deux séparateurs ; les deux boutons se
-   partagent l'espace 50/50, toujours de largeur strictement égale */
+   partagent l'espace 50/50. Ils ne descendent jamais sous la largeur de leur
+   libellé : ce sont le nom du modèle et la pastille qui se tronquent. */
 .hdr-actions {
     display: flex;
     align-items: center;
     gap: 6px;
     flex: 1;
-    min-width: 0;
 }
-.hdr-action { flex: 1 1 0; min-width: 0; padding: 0 10px; }
+.hdr-action { flex: 1 1 0; padding: 0 10px; }
 
 /* Pastille d'alerte, cliquable en pleine hauteur de barre */
 .warn-slot {
@@ -371,19 +371,20 @@ code {
 .notpl-slot { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
 .notpl-text { font-size: 12.5px; color: var(--texte-3); font-style: italic; white-space: nowrap; }
 
-/* Sondes de mesure hors écran (responsive mesuré, pas deviné) */
-.hdr-probe {
-    position: fixed;
-    top: 0;
-    left: 0;
-    visibility: hidden;
-    pointer-events: none;
-    z-index: -1;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    white-space: nowrap;
-    padding: 0 14px;
+/* Paliers responsive : le widget est une iframe, sa largeur est celle du
+   viewport. Titre masqué, puis libellés courts, puis actions repliées dans
+   le menu de la roue crantée. */
+.lbl-short, .hdr-spacer-narrow, .gear-actions { display: none; }
+@media (max-width: 900px) {
+    .hdr-title, .hdr-title + .hdr-sep { display: none; }
+}
+@media (max-width: 720px) {
+    .lbl-long { display: none; }
+    .lbl-short { display: inline; }
+}
+@media (max-width: 460px) {
+    .hdr-actions { display: none; }
+    .hdr-spacer-narrow, .gear-actions { display: block; }
 }
 
 /* ── Prévisualisation ────────────────────────────────────────────── */

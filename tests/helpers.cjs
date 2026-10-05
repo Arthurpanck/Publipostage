@@ -9,7 +9,7 @@ function loadApp(extra = {}) {
         console: { log() {}, warn() {}, error() {} }, ...extra,
     });
     app.window = app;
-    for (const file of ['inc/pizzip.js', 'inc/docxtemplater.js', 'relations-tools.js', 'docx-tools.js']) {
+    for (const file of ['inc/pizzip.js', 'inc/docxtemplater.js', 'data-tools.js', 'docx-tools.js']) {
         vm.runInContext(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), app, { filename: file });
     }
     return app;
@@ -27,12 +27,16 @@ function template(app, body, header = '', footer = '') {
     if (footer) zip.file('word/footer1.xml', `<w:ftr xmlns:w="${NS}">${footer}</w:ftr>`);
     return zip.generate({ type: 'uint8array' });
 }
-async function render(app, buffer, data) {
-    const blob = app.generateDocxBlob(data, buffer);
+// Même forme que newBatch() dans main.js
+function batch(viewRows = []) {
+    return { cache: new Map(), viewRows, unknownTags: new Set(), notes: new Set() };
+}
+async function render(app, buffer, data, unknownTags) {
+    const blob = app.generateDocxBlob(data, buffer, unknownTags);
     return new app.PizZip(await blob.arrayBuffer());
 }
 function xmlText(xml) {
     const doc = new DOMParser().parseFromString(xml, 'text/xml');
     return Array.from(doc.getElementsByTagName('w:t')).map(t => t.textContent).join('');
 }
-module.exports = { loadApp, template, render, xmlText, para, run, NS };
+module.exports = { loadApp, template, batch, render, xmlText, para, run, NS };

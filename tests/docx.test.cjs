@@ -4,9 +4,10 @@ const { loadApp, template, render, xmlText, para, run } = require('./helpers.cjs
 
 test('balises simples, accents, valeurs nulles, zéro et faux', async () => {
     const app = loadApp();
-    const zip = await render(app, template(app, para('{Titre}|{Prénom}|{Vide}|{Zero}|{Faux}')), { Titre: 'Visite', Prenom: 'Élodie', Vide: null, Zero: 0, Faux: false });
+    const unknown = new Set();
+    const zip = await render(app, template(app, para('{Titre}|{Prénom}|{Vide}|{Zero}|{Faux}')), { Titre: 'Visite', Prenom: 'Élodie', Vide: null, Zero: 0, Faux: false }, unknown);
     assert.equal(xmlText(zip.file('word/document.xml').asText()), 'Visite|Élodie||0|false');
-    assert.equal(app.getUnknownTags().length, 0);
+    assert.equal(unknown.size, 0);
 });
 test('doubles accolades et balises simples peuvent coexister', async () => {
     const app = loadApp();
@@ -28,9 +29,10 @@ test('balise répartie sur des runs sans déplacer le texte voisin', async () =>
 });
 test('en-têtes et pieds de page suivent les mêmes règles', async () => {
     const app = loadApp();
-    const zip = await render(app, template(app, para('{Prénom}'), para('{{Prénom}}'), para('{Prénom}')), { Prenom: 'Élodie' });
+    const unknown = new Set();
+    const zip = await render(app, template(app, para('{Prénom}'), para('{{Prénom}}'), para('{Prénom}')), { Prenom: 'Élodie' }, unknown);
     for (const name of ['document', 'header1', 'footer1']) assert.equal(xmlText(zip.file('word/' + name + '.xml').asText()), 'Élodie');
-    assert.equal(app.getUnknownTags().length, 0);
+    assert.equal(unknown.size, 0);
 });
 for (const text of ['{{Titre}', '{Titre}}', '{{{Titre}}}', '{Titre', 'Titre}']) {
     test('rejette les accolades mal appariées : ' + text, () => {
@@ -61,9 +63,22 @@ test('boucles manuelles, conditions inversées et tableaux sans enfant', async (
 });
 test('les balises inconnues sont signalées, les entités XML préservées', async () => {
     const app = loadApp();
-    const zip = await render(app, template(app, para('A &amp; B {Inconnue} {Titre}')), { Titre: 'C & D <E>' });
+    const unknown = new Set();
+    const zip = await render(app, template(app, para('A &amp; B {Inconnue} {Titre}')), { Titre: 'C & D <E>' }, unknown);
     assert.equal(xmlText(zip.file('word/document.xml').asText()), 'A & B  C & D <E>');
-    assert.equal(app.getUnknownTags().join(','), 'Inconnue');
+    assert.equal([...unknown].join(','), 'Inconnue');
+});
+test('une balise pointée non résolue est vidée et signalée telle qu’écrite', async () => {
+    const app = loadApp();
+    const unknown = new Set();
+    const zip = await render(app, template(app, para('Avant {Inconnue.Nom} après') + para('{Titre}')), { Titre: 'T' }, unknown);
+    assert.equal(xmlText(zip.file('word/document.xml').asText()), 'Avant  aprèsT');
+    assert.equal([...unknown].join(','), 'Inconnue.Nom');
+});
+test('boucle imbriquée : un champ de la ligne reste accessible dans la boucle', async () => {
+    const app = loadApp();
+    const zip = await render(app, template(app, para('{#Enfants}{Nom} de {Titre};{/Enfants}')), { Titre: 'P', Enfants: [{ Nom: 'A' }, { Nom: 'B' }] });
+    assert.equal(xmlText(zip.file('word/document.xml').asText()), 'A de P;B de P;');
 });
 
 test('une table citée seulement dans l’en-tête est détectée et répétée', async () => {

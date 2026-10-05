@@ -8,18 +8,22 @@ const { loadApp, template, para } = require('./helpers.cjs');
 function controller() {
     let options = { templateId: 42, templateName: 'ancien.docx', other: 'conserver' };
     const events = [];
+    const subscriptions = {};
     const app = loadApp({
-        grist: { ready() {}, onRecord() {}, onRecords() {}, getOptions: async () => options,
+        grist: { ready() {},
+            onRecord: (callback, opts) => { subscriptions.onRecord = opts; },
+            onRecords: (callback, opts) => { subscriptions.onRecords = opts; },
+            getOptions: async () => options,
             setOptions: async value => { events.push('save'); options = value; },
             getOption: async key => options[key], setOption: async (key, value) => { events.push('save'); options[key] = value; } },
         setTimeout() {}, initUi() {}, uiToast: (message, type) => events.push({message, type}),
-        uiCloseModal() {}, uiSetTemplate() {}, uiEnableActions() {}, uiShowPreview() {}, uiPreviewEmptyText() {},
+        uiCloseModal() {}, uiSetTemplate() {}, uiEnableActions() {}, uiShowPreview() {}, uiPreviewEmptyText() {}, uiSetWarnings() {},
         PDFLib: { PDFDocument: { load: async () => { throw new Error('PDF invalide'); } } },
     });
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8'), app);
     app.readFileAsBuffer = async file => file.buffer;
     app.uploadAttachmentToGrist = async () => { events.push('upload'); return 99; };
-    return { app, events, options: () => options };
+    return { app, events, subscriptions, options: () => options };
 }
 test('un DOCX invalide est refusé avant upload et conserve le modèle précédent', async () => {
     const { app, events, options } = controller();
@@ -53,8 +57,30 @@ test('le format binaire .doc est refusé avec une consigne de conversion', async
 
 test('un échec de lecture des tables liées bloque la génération au lieu de produire un document incomplet', async () => {
     const { app } = controller();
-    app.completeParentData = async () => {};
-    app.addChildTablesData = async () => { throw new Error('Accès à Enfants indisponible'); };
+    app.addLinkedTables = async () => { throw new Error('Accès à Enfants indisponible'); };
     app.updateTemplateState(template(app, para('{Enfants.Nom}')), 'relations.docx', 'docx');
-    await assert.rejects(app.dispatchGeneration({ id: 1, Titre: 'Parent' }), /Accès à Enfants indisponible/);
+    await assert.rejects(app.dispatchGeneration({ id: 1, Titre: 'Parent' }, app.newBatch()), /Accès à Enfants indisponible/);
+});
+
+test('les lignes reçues de Grist incluent les colonnes masquées du widget', () => {
+    const { subscriptions } = controller();
+    assert.equal(subscriptions.onRecord.includeColumns, 'normal');
+    assert.equal(subscriptions.onRecords.includeColumns, 'normal');
+});
+
+test('un aperçu terminé après un aperçu plus récent n’est pas affiché', async () => {
+    const { app } = controller();
+    const container = { replaceChildren(...nodes) { this.nodes = nodes; } };
+    app.document = { getElementById: () => container, createElement: () => ({ childNodes: [] }) };
+    app.docx = { renderAsync: async (blob, page) => { page.childNodes = [blob]; } };
+    vm.runInContext("state.currentRecord = { id: 1 }; state.templateType = 'docx';", app);
+    const pending = [];
+    app.dispatchGeneration = () => new Promise(resolve => pending.push(resolve));
+    const ancien = app.updatePreview();
+    const recent = app.updatePreview();
+    pending[1]('récent');
+    await recent;
+    pending[0]('ancien');
+    await ancien;
+    assert.deepEqual(container.nodes, ['récent']);
 });
