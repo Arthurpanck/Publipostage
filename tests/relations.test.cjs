@@ -57,14 +57,14 @@ test('table sans lien : diagnostic explicite, champ parent conservé', async () 
     const { app } = setup();
     const data = await app.addChildTablesData({ Titre: 'Parent' }, 1, template(app, para('{Lieux.Nom} {Titre}')));
     assert.equal(data.Titre, 'Parent');
-    assert.match(app.getRelationsWarnings().join(' '), /Lieux.*Parents/);
+    assert.match(app.getRelationsWarnings().join(' '), /lieux.*Parents/);
 });
 
 test('plusieurs colonnes de référence : avertir du lien choisi', async () => {
     const { app } = setup({ ambiguous: true });
     const data = await app.addChildTablesData({}, 1, template(app, para('{Enfants.Nom}')));
-    assert.equal(data.Enfants.map(row => row.Nom).join(','), 'Alice,Charlie');
-    assert.match(app.getRelationsWarnings().join(' '), /Enfants.*Parent.*AutreParent/);
+    assert.equal(data.enfants.map(row => row.nom).join(','), 'Alice,Charlie');
+    assert.match(app.getRelationsWarnings().join(' '), /enfants.*Parent.*AutreParent/);
 });
 
 test('une lecture échouée peut être retentée sans recharger le widget', async () => {

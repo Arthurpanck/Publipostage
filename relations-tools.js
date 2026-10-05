@@ -217,8 +217,8 @@ async function addChildTablesData(data, parentId, buffer) {
 
     const cible = await grist.getSelectedTableId(); // table du widget (le parent)
     // Une balise portant le nom de la table du widget désigne sa vue filtrée.
-    if (used.includes(cible)) data[cible] = await fetchSelectedViewRows();
-    const related = used.filter(table => table !== cible);
+    if (used.includes(sanitizeKey(cible))) data[sanitizeKey(cible)] = await fetchSelectedViewRows();
+    const related = used.filter(table => table !== sanitizeKey(cible));
     if (!related.length) return data;
     const refs = await findTablesReferencing(cible);
     const tables = await fetchTableCached('_grist_Tables');
@@ -226,16 +226,16 @@ async function addChildTablesData(data, parentId, buffer) {
     const summarySource = sourceRef ? tables.tableId[tables.id.indexOf(sourceRef)] : null;
 
     for (const table of related) {
-        if (table === summarySource) {
-            data[table] = await fetchSummaryRows(cible, table, parentId);
+        if (table === sanitizeKey(summarySource)) {
+            data[table] = await fetchSummaryRows(cible, summarySource, parentId);
             continue;
         }
-        const links = refs.filter(r => r.table === table);
+        const links = refs.filter(r => sanitizeKey(r.table) === table);
         const link = links[0];
         if (!link) {
             // Pas une table enfant liée : on ne touche pas aux données. Un
             // {#Champ} peut être une section conditionnelle sur un champ parent.
-            if (!(table in data)) {
+            if (!Object.keys(data).some(key => sanitizeKey(key) === table)) {
                 const msg = `"${table}" ne référence pas la table "${cible}" (aucune colonne Ref:/RefList:, ou nom mal orthographié).`;
                 console.warn(msg);
                 relationsWarnings.push(msg);

@@ -41,7 +41,7 @@ test('regroupement : plusieurs groupes, ligne partagée et ordre donné par grou
 test('group masqué : les détails se chargent même sans complément préalable du parent', async () => {
     const { app } = setup();
     const data = await app.addChildTablesData({}, 1, template(app, para('{Donnees.Titre}')));
-    assert.equal(data.Donnees.map(r => r.Titre).join(','), 'Accueil,Visite');
+    assert.equal(data.donnees.map(r => r.titre).join(','), 'Accueil,Visite');
 });
 
 test('regroupement : tableau Word, en-tête, pied de page et boucle manuelle', async () => {
@@ -86,7 +86,7 @@ test('une colonne group ordinaire ne suffit pas à traiter la table comme un reg
     const { app, tables, calls } = setup();
     tables._grist_Tables.summarySourceTable[1] = 0;
     const data = await app.addChildTablesData({}, 1, template(app, para('{Donnees.Titre}')));
-    assert.equal(data.Donnees, undefined);
+    assert.equal(data.donnees, undefined);
     assert.equal(calls.includes('Donnees'), false);
-    assert.match(app.getRelationsWarnings().join(' '), /Donnees.*Recap/);
+    assert.match(app.getRelationsWarnings().join(' '), /donnees.*Recap/);
 });

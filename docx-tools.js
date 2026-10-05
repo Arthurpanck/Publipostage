@@ -37,6 +37,7 @@ function compileDocxTemplate(buffer, data, nullGetter) {
 
 // Génération du docx
 function generateDocxBlob(data, buffer) {
+    data = normalizeMergeData(data);
     lastUnknownTags = [];
     lastKnownKeys = [];
 
@@ -106,7 +107,7 @@ function repairDocxXml(xml) {
         for (const tag of tags.reverse()) {
             const start = tag.index, end = start + tag[0].length;
             if (text[start - 1] === '{' || text[end] === '}') continue;
-            const replacement = '{' + (tag[1] || tag[2]).trim() + '}';
+            const replacement = '{' + normalizeDocxTag((tag[1] || tag[2]).trim()) + '}';
             for (const node of nodes) {
                 const from = Math.max(start - node.offset, 0);
                 const to = Math.min(end - node.offset, node.length);
@@ -147,16 +148,4 @@ function handleDocxError(error) {
     } else {
         throw error;
     }
-}
-
-function sanitizeKey(keytoSanitize) {
-    if (!keytoSanitize) {
-        return "";
-    }
-    let sanitize = keytoSanitize.toString();
-    sanitize = sanitize.normalize('NFKD');
-    sanitize = sanitize.replace(/[\u0300-\u036f]/g, "");
-    sanitize = sanitize.replace(/[^a-zA-Z0-9_]+/g, "_");
-    sanitize = sanitize.replace(/^_+/, "");
-    return sanitize;
 }

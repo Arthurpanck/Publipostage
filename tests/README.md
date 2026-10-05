@@ -86,3 +86,11 @@ Pour vérifier dans Grist : brancher le widget sur la table détaillée,
 configurer sa liaison au sélecteur de commune ou au regroupement, puis
 changer le sélecteur sans cliquer sur chaque service. Comparer la liste
 publipostée aux lignes transmises au widget, puis tester un filtre et un tri.
+
+## Normalisation
+
+Les noms de balises et les clés Grist sont normalisés par `merge-utils.js` :
+minuscules, accents supprimés, caractères spéciaux remplacés par des underscores.
+Les suffixes comme `_2` restent distincts. Les identifiants réels des tables
+sont conservés pour les appels Grist. Les boucles et conditions Word suivent
+la même règle, ainsi que les champs PDF. Les valeurs ne changent pas de casse.

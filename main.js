@@ -207,17 +207,7 @@ function refreshWarnings() {
     uiSetWarnings(tags, notes);
 }
 
-function sanitizeKey(keytoSanitize) {
-    if (!keytoSanitize) {
-        return "";
-    }
-    let sanitize = keytoSanitize.toString();
-    sanitize = sanitize.normalize('NFKD');
-    sanitize = sanitize.replace(/[\u0300-\u036f]/g, ""); // Supprime les accents
-    sanitize = sanitize.replace(/[^a-zA-Z0-9_]+/g, "_"); // Remplace caractères spéciaux
-    sanitize = sanitize.replace(/^_+/, ""); // Supprime _ au début
-    return sanitize;
-}
+
 
 function updateActionsState() {
     const ready = state.templateBuffer !== null;

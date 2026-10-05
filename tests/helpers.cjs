@@ -9,7 +9,7 @@ function loadApp(extra = {}) {
         console: { log() {}, warn() {}, error() {} }, ...extra,
     });
     app.window = app;
-    for (const file of ['inc/pizzip.js', 'inc/docxtemplater.js', 'relations-tools.js', 'docx-tools.js']) {
+    for (const file of ['inc/pizzip.js', 'inc/docxtemplater.js', 'merge-utils.js', 'relations-tools.js', 'docx-tools.js']) {
         vm.runInContext(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), app, { filename: file });
     }
     return app;

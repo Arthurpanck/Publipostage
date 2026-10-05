@@ -6,6 +6,7 @@
  */
 
 async function generatePdfBlob(data, buffer) {
+    data = normalizeMergeData(data);
     const { PDFDocument } = PDFLib;
     const pdfDoc = await PDFDocument.load(buffer);
     const form = pdfDoc.getForm();
@@ -49,16 +50,4 @@ async function generatePdfBlob(data, buffer) {
     form.flatten();
     const pdfBytes = await pdfDoc.save();
     return new Blob([pdfBytes], { type: "application/pdf" });
-}
-
-function sanitizeKey(keytoSanitize) {
-    if (!keytoSanitize) {
-        return "";
-    }
-    let sanitize = keytoSanitize.toString();
-    sanitize = sanitize.normalize('NFKD');
-    sanitize = sanitize.replace(/[\u0300-\u036f]/g, "");
-    sanitize = sanitize.replace(/[^a-zA-Z0-9_]+/g, "_");
-    sanitize = sanitize.replace(/^_+/, "");
-    return sanitize;
 }

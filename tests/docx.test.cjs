@@ -63,13 +63,13 @@ test('les balises inconnues sont signalées, les entités XML préservées', asy
     const app = loadApp();
     const zip = await render(app, template(app, para('A &amp; B {Inconnue} {Titre}')), { Titre: 'C & D <E>' });
     assert.equal(xmlText(zip.file('word/document.xml').asText()), 'A & B  C & D <E>');
-    assert.equal(app.getUnknownTags().join(','), 'Inconnue');
+    assert.equal(app.getUnknownTags().join(','), 'inconnue');
 });
 
 test('une table citée seulement dans l’en-tête est détectée et répétée', async () => {
     const app = loadApp();
     const buffer = template(app, para('Corps'), para('{{Enfants.Nom}}'));
-    assert.equal(app.getReferencedTables(buffer).join(','), 'Enfants');
+    assert.equal(app.getReferencedTables(buffer).join(','), 'enfants');
     const zip = await render(app, buffer, { Enfants: [{Nom:'Alice'}, {Nom:'Bob'}] });
     assert.equal(xmlText(zip.file('word/header1.xml').asText()), 'AliceBob');
 });
