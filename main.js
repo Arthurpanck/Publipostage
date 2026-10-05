@@ -15,41 +15,25 @@ let state = {
 };
 
 grist.ready({
-    requiredAccess: 'full'
+    requiredAccess: 'full',
+    columns: [{ name: 'filename', title: 'Nom du document', optional: true,
+        description: 'Colonne utilisée pour nommer le document et chaque fichier du ZIP. Vide : nom automatique.' }]
 });
 
 initUi({
     onPickFile: handleTemplateUpload,
     onDownloadLine: downloadSingle,
     onDownloadZip: downloadBulk,
-    onFilenameColumn: saveFilenameColumn,
 });
-
-grist.onOptions((options) => {
-    state.filenameColumn = typeof options?.filenameColumn === 'string' ? options.filenameColumn : '';
-    uiSetFilenameColumn(state.filenameColumn);
-});
-
-async function saveFilenameColumn(column) {
-    try {
-        await grist.setOption('filenameColumn', column.trim());
-        state.filenameColumn = column.trim();
-        uiSetFilenameColumn(state.filenameColumn);
-        uiToast("Colonne du nom de fichier enregistrée", "success");
-    } catch (error) {
-        uiSetFilenameColumn(state.filenameColumn);
-        uiToast("Enregistrement impossible : " + error.message, "error");
-    }
-}
 
 // Lancement différé du chargement du template car plante parfois si pas de timeout
 setTimeout(() => {
     loadSavedTemplate();
 }, 500);
 
-grist.onRecord(async (record) => {
+grist.onRecord(async (record, mappings) => {
+    state.filenameColumn = mappings?.filename || '';
     state.currentRecord = record;
-    uiSetFilenameColumns(Object.keys(record || {}));
     clearRelationsCache(); // les données liées ont pu changer
     updateActionsState();
 
@@ -57,15 +41,16 @@ grist.onRecord(async (record) => {
     if (state.currentRecord && state.templateBuffer) {
         await updatePreview();
     }
-});
+}, { includeColumns: 'normal' });
 
-grist.onRecords(async (records) => {
+grist.onRecords(async (records, mappings) => {
+    state.filenameColumn = mappings?.filename || '';
     state.allRecords = records;
     clearRelationsCache(); // les données liées ont pu changer
     updateActionsState();
     // Une liaison ou un filtre peut changer les lignes sans déplacer le curseur.
     if (state.currentRecord && state.templateBuffer) await updatePreview();
-});
+}, { includeColumns: 'normal' });
 
 function getTemplateType(name) {
     const extension = name.split('.').pop().toLowerCase();
@@ -325,18 +310,7 @@ function updateTemplateState(buffer, name, type) {
     }
 }
 
-// La colonne peut être masquée dans la vue ; le cache est partagé avec la génération.
-async function exportFilename(row, column, type, prefix) {
-    let value;
-    if (column) {
-        const key = Object.keys(row).find(key => sanitizeKey(key) === sanitizeKey(column));
-        if (key !== undefined) value = row[key];
-        else {
-            const table = await fetchTableCached(await grist.getSelectedTableId());
-            const col = Object.keys(table).find(key => sanitizeKey(key) === sanitizeKey(column));
-            const index = table.id.indexOf(row.id);
-            if (col !== undefined && index !== -1) value = table[col][index];
-        }
-    }
-    return buildExportFilename(value, `${prefix}_${row.id || 'export'}`, type);
+// Le mapping officiel donne l’identifiant réel de la colonne choisie dans Grist.
+function exportFilename(row, column, type, prefix) {
+    return buildExportFilename(column ? row[column] : undefined, `${prefix}_${row.id || 'export'}`, type);
 }

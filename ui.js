@@ -64,8 +64,6 @@ function initUi(handlers) {
         uiState.showWarnMenu = false;
         uiRender();
     });
-    $('gearMenu').addEventListener('click', e => e.stopPropagation());
-    $('filenameColumn').addEventListener('change', e => uiHandlers.onFilenameColumn(e.target.value));
     $('gearChangeTemplate').addEventListener('click', () => {
         uiState.showGearMenu = false;
         uiRender();
@@ -377,19 +375,5 @@ function uiMeasureLevel() {
     if (level !== uiState.degradeLevel) {
         uiState.degradeLevel = level;
         uiRender();
-    }
-}
-
-function uiSetFilenameColumn(column) {
-    $('filenameColumn').value = column;
-}
-
-function uiSetFilenameColumns(columns) {
-    const list = $('filenameColumns');
-    list.replaceChildren();
-    for (const column of columns.filter(key => key !== 'id' && !key.startsWith('__'))) {
-        const option = document.createElement('option');
-        option.value = column;
-        list.appendChild(option);
     }
 }

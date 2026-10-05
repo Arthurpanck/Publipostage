@@ -6,14 +6,12 @@ const { loadApp } = require('./helpers.cjs');
 
 function controller() {
     const saved = [], files = [], messages = [];
-    let onOptions;
-    const options = { templateId: 42 };
+    let onRecord, onRecords, ready, recordOptions, recordsOptions;
     const app = loadApp({
-        grist: { ready() {}, onRecord() {}, onRecords() {}, onOptions(fn) { onOptions = fn; },
-            async setOption(key, value) { options[key] = value; },
-            async getSelectedTableId() { return 'Donnees'; },
-            docApi: { async fetchTable() { return { id: [1], Nom_cache: ['Caché'] }; } } },
-        initUi() {}, setTimeout() {}, uiSetFilenameColumn() {},
+        grist: { ready(value) { ready = value; },
+            onRecord(fn, options) { onRecord = fn; recordOptions = options; },
+            onRecords(fn, options) { onRecords = fn; recordsOptions = options; } },
+        initUi() {}, setTimeout() {}, uiEnableActions() {},
         uiToast: (...args) => messages.push(args), saveAs: (blob, name) => saved.push(name),
         JSZip: class { file(name) { files.push(name); } async generateAsync() { return new Blob(); } },
     });
@@ -21,7 +19,8 @@ function controller() {
     vm.runInContext("state.templateBuffer = {}; state.templateType = 'docx';", app);
     app.dispatchGeneration = async () => new Blob();
     app.refreshWarnings = () => {};
-    return { app, saved, files, messages, options, onOptions };
+    app.updatePreview = async () => {};
+    return { app, saved, files, messages, onRecord, onRecords, ready, recordOptions, recordsOptions };
 }
 
 test('noms portables : accents, chemins, extensions, réservés et valeurs vides', () => {
@@ -36,38 +35,42 @@ test('noms portables : accents, chemins, extensions, réservés et valeurs vides
     assert.ok(name('é'.repeat(400), 'Doc_1', 'docx').length < 200);
 });
 
-test('export individuel DOCX/PDF, colonne facultative et masquée', async () => {
-    const { app, saved, onOptions } = controller();
-    vm.runInContext("state.currentRecord = {id: 1, Titre: 'Séance'};", app);
+test('mapping officiel facultatif : déclaration et conservation de toutes les colonnes', () => {
+    const { ready, recordOptions, recordsOptions } = controller();
+    assert.equal(ready.columns[0].name, 'filename');
+    assert.equal(ready.columns[0].optional, true);
+    assert.equal(recordOptions.includeColumns, 'normal');
+    assert.equal(recordsOptions.includeColumns, 'normal');
+});
+
+test('export individuel DOCX/PDF : mapping, changement et retrait du choix', async () => {
+    const { app, saved, onRecord } = controller();
+    const row = {id: 1, Titre: 'Séance', Nom_cache: 'Caché'};
+    await onRecord(row, null);
     await app.downloadSingle();
-    onOptions({ filenameColumn: 'TITRE' });
+    await onRecord(row, {filename: 'Titre'});
     await app.downloadSingle();
     vm.runInContext("state.templateType = 'pdf';", app);
     await app.downloadSingle();
-    onOptions({ filenameColumn: 'nom_cache' });
+    await onRecord(row, {filename: 'Nom_cache'});
     await app.downloadSingle();
-    onOptions({ filenameColumn: 'colonne_supprimee' });
+    await onRecord(row, {filename: null});
     await app.downloadSingle();
     assert.deepEqual(saved, ['Document_1.docx', 'Séance.docx', 'Séance.pdf', 'Caché.pdf', 'Document_1.pdf']);
 });
 
-test('ZIP : collisions de casse, de suffixe et de nettoyage, cellules vides', async () => {
-    const { app, files, saved, onOptions } = controller();
-    onOptions({ filenameColumn: 'Titre' });
-    vm.runInContext(`state.allRecords = [
+test('ZIP : mapping onRecords, collisions, valeurs vides et retrait du choix', async () => {
+    const { app, files, saved, onRecords } = controller();
+    const rows = [
         {id:1,Titre:'Nom'}, {id:2,Titre:'nom'}, {id:3,Titre:'Nom (2)'},
         {id:4,Titre:'A/B'}, {id:5,Titre:'A:B'}, {id:6,Titre:''}, {id:'new'}
-    ];`, app);
+    ];
+    await onRecords(rows, {filename: 'Titre'});
     await app.downloadBulk();
     assert.deepEqual(files, ['Nom.docx','nom (2).docx','Nom (2) (2).docx','A_B.docx','A_B (2).docx','Doc_6.docx']);
     assert.deepEqual(saved, ['Publipostage.zip']);
-});
-
-test('le choix persiste sans écraser le modèle et peut être désactivé', async () => {
-    const { app, options } = controller();
-    await app.saveFilenameColumn(' Titre ');
-    assert.equal(options.filenameColumn, 'Titre');
-    assert.equal(options.templateId, 42);
-    await app.saveFilenameColumn('');
-    assert.equal(options.filenameColumn, '');
+    files.length = 0;
+    await onRecords([{id:1,Titre:'Nom'}], {filename: null});
+    await app.downloadBulk();
+    assert.deepEqual(files, ['Doc_1.docx']);
 });
