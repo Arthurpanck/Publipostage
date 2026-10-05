@@ -9,7 +9,7 @@ function controller() {
     let options = { templateId: 42, templateName: 'ancien.docx', other: 'conserver' };
     const events = [];
     const app = loadApp({
-        grist: { ready() {}, onRecord() {}, onRecords() {}, getOptions: async () => options,
+        grist: { ready() {}, onOptions() {}, onRecord() {}, onRecords() {}, getOptions: async () => options,
             setOptions: async value => { events.push('save'); options = value; },
             getOption: async key => options[key], setOption: async (key, value) => { events.push('save'); options[key] = value; } },
         setTimeout() {}, initUi() {}, uiToast: (message, type) => events.push({message, type}),

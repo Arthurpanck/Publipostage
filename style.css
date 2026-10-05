@@ -452,3 +452,8 @@ code {
 }
 .toast.success { background: var(--vert); }
 .toast.error { background: #ce0500; }
+
+.filename-setting { padding: 12px 14px; width: min(280px, calc(100vw - 28px)); box-sizing: border-box; white-space: normal; }
+.filename-setting label { display: block; font-size: 13px; margin-bottom: 6px; }
+.filename-setting input { width: 100%; box-sizing: border-box; padding: 7px; border: 1px solid var(--bordure); border-radius: 4px; font: inherit; }
+.filename-setting small { display: block; margin-top: 6px; font-size: 11px; line-height: 1.4; color: var(--texte); }

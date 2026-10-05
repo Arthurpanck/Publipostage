@@ -10,7 +10,8 @@ let state = {
     allRecords: [],
     templateBuffer: null,
     templateType: null,
-    templateName: null
+    templateName: null,
+    filenameColumn: ''
 };
 
 grist.ready({
@@ -21,7 +22,25 @@ initUi({
     onPickFile: handleTemplateUpload,
     onDownloadLine: downloadSingle,
     onDownloadZip: downloadBulk,
+    onFilenameColumn: saveFilenameColumn,
 });
+
+grist.onOptions((options) => {
+    state.filenameColumn = typeof options?.filenameColumn === 'string' ? options.filenameColumn : '';
+    uiSetFilenameColumn(state.filenameColumn);
+});
+
+async function saveFilenameColumn(column) {
+    try {
+        await grist.setOption('filenameColumn', column.trim());
+        state.filenameColumn = column.trim();
+        uiSetFilenameColumn(state.filenameColumn);
+        uiToast("Colonne du nom de fichier enregistrée", "success");
+    } catch (error) {
+        uiSetFilenameColumn(state.filenameColumn);
+        uiToast("Enregistrement impossible : " + error.message, "error");
+    }
+}
 
 // Lancement différé du chargement du template car plante parfois si pas de timeout
 setTimeout(() => {
@@ -30,6 +49,7 @@ setTimeout(() => {
 
 grist.onRecord(async (record) => {
     state.currentRecord = record;
+    uiSetFilenameColumns(Object.keys(record || {}));
     clearRelationsCache(); // les données liées ont pu changer
     updateActionsState();
 
@@ -107,8 +127,10 @@ async function downloadSingle() {
     uiToast("Génération du document...", "normal");
     clearRelationsCache(); // relire les détails, même si les totaux du groupe n'ont pas changé
     try {
-        const blob = await dispatchGeneration(state.currentRecord);
-        saveAs(blob, `Document_${state.currentRecord.id || 'export'}.${state.templateType}`);
+        const row = state.currentRecord;
+        const fileName = await exportFilename(row, state.filenameColumn, state.templateType, 'Document');
+        const blob = await dispatchGeneration(row);
+        saveAs(blob, fileName);
         refreshWarnings();
         uiToast("Téléchargement terminé", "success");
     } catch (error) {
@@ -126,11 +148,14 @@ async function downloadBulk() {
     clearRelationsCache(); // cache partagé uniquement à l'intérieur de ce lot
     try {
         const zip = new JSZip();
+        const usedNames = new Set();
+        const column = state.filenameColumn;
+        const type = state.templateType;
         for (const row of state.allRecords) {
             if (row.id === 'new') {
                 continue;
             }
-            const fileName = `Doc_${row.id}.${state.templateType}`;
+            const fileName = uniqueExportFilename(await exportFilename(row, column, type, 'Doc'), usedNames);
             const docBlob = await dispatchGeneration(row);
             zip.file(fileName, docBlob);
         }
@@ -298,4 +323,20 @@ function updateTemplateState(buffer, name, type) {
         uiShowPreview(false);
         uiPreviewEmptyText("Sélectionner une ligne pour voir l'aperçu");
     }
+}
+
+// La colonne peut être masquée dans la vue ; le cache est partagé avec la génération.
+async function exportFilename(row, column, type, prefix) {
+    let value;
+    if (column) {
+        const key = Object.keys(row).find(key => sanitizeKey(key) === sanitizeKey(column));
+        if (key !== undefined) value = row[key];
+        else {
+            const table = await fetchTableCached(await grist.getSelectedTableId());
+            const col = Object.keys(table).find(key => sanitizeKey(key) === sanitizeKey(column));
+            const index = table.id.indexOf(row.id);
+            if (col !== undefined && index !== -1) value = table[col][index];
+        }
+    }
+    return buildExportFilename(value, `${prefix}_${row.id || 'export'}`, type);
 }
