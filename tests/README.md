@@ -115,3 +115,28 @@ minuscules, accents supprimés, caractères spéciaux remplacés par des undersc
 Les suffixes comme `_2` restent distincts. Les identifiants réels des tables
 sont conservés pour les appels Grist. Les boucles et conditions Word suivent
 la même règle, ainsi que les champs PDF. Les valeurs ne changent pas de casse.
+
+## Filtres
+
+`{filtre: Table.Colonne == "valeur"}` (ou `!=`) ne garde que les lignes
+correspondantes de Table dans sa portée : le tableau Word qui contient la
+balise, sinon jusqu’à `{fin filtre}` (ou `{/filtre}`) ou la fin du document.
+Un second filtre sur la même table remplace le premier. Les lignes
+`{Table.Colonne}`, les boucles `{#Table}` et les conditions `{^Table}` de la
+portée suivent le filtre. La balise affiche la valeur (rien pour `!=`) ; une
+ligne réduite à `{fin filtre}` ou à un filtre `!=` disparaît, sauf dans une
+cellule de tableau. La comparaison ignore casse, accents et ponctuation ; une
+liste (choix multiples, références) correspond si l’un de ses éléments
+correspond. Les guillemets droits, typographiques ou chevrons sont facultatifs.
+
+`tests/filter.test.cjs` couvre le bandeau de tableau, la portée limitée au
+tableau, les puces jusqu’à `{fin filtre}`, les filtres successifs, `!=`, les
+boucles et conditions inversées, les valeurs encodées de Grist, la colonne ou
+la table inconnue (signalée dans la pastille) et le filtre mal écrit (refusé
+dès l’import).
+
+Pour vérifier dans Grist : un tableau dont le bandeau contient
+`{filtre: BDD_SERVICES.Fonction == "Direction territoriale"}` et une ligne
+`{BDD_SERVICES.Nom}` ; puis une liste à puces encadrée par un filtre et
+`{fin filtre}`, suivie d’une liste non filtrée. Comparer l’aperçu, le document
+individuel et le ZIP.

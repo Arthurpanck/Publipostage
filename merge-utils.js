@@ -30,6 +30,8 @@ function normalizeMergeData(value) {
 function normalizeDocxTag(key) {
     // Le point signifie l'élément courant ; la directive = change les délimiteurs.
     if (key === '.' || key.startsWith('=')) return key;
+    // Un filtre garde sa valeur telle qu'écrite (voir applyFilters dans docx-tools.js).
+    if (/^filtre\s*:/i.test(key)) return key;
     const prefix = /^[#\/^@]/.test(key) ? key[0] : '';
     return prefix + key.slice(prefix.length).split('.').map(sanitizeKey).join('.');
 }

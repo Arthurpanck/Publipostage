@@ -10,9 +10,14 @@
  *     Dans une ligne de tableau : la ligne est répétée pour chaque ligne liée.
  *     Hors tableau : le paragraphe est répété pour chaque ligne liée.
  *   - Boucle manuelle docxtemplater : {#Membres}{Nom_Membre}{/Membres}.
+ *   - Filtre : {filtre: Membres.Colonne == "valeur"} (ou !=) ne garde que les
+ *     lignes correspondantes de Membres dans sa portée : le tableau Word qui
+ *     le contient, sinon jusqu'à {fin filtre} ou la fin du document. La
+ *     balise affiche la valeur filtrée (rien pour !=).
  *
  * Limites connues :
  *   - Une seule table liée par ligne de tableau ou paragraphe répété.
+ *   - Une boucle ouverte dans la portée d'un filtre doit s'y fermer.
  */
 
 // Balise pointée {Table.Colonne}
@@ -49,11 +54,12 @@ function getReferencedTables(buffer) {
 
 // Même compilation à l'import et à la génération : un modèle invalide ne doit
 // pas remplacer le dernier modèle utilisable dans les options Grist.
-function compileDocxTemplate(buffer, data, nullGetter) {
+function compileDocxTemplate(buffer, data, nullGetter, unknownTags = new Set()) {
     try {
         const zip = new PizZip(buffer);
+        const filters = { data: data, unknownTags: unknownTags, count: 0 };
         for (const [name, xml] of Object.entries(parseTemplate(buffer).parts)) {
-            zip.file(name, withTextBoxes(xml, (part) => transformDottedXml(part, data)));
+            zip.file(name, withTextBoxes(xml, (part) => transformDottedXml(applyFilters(part, filters), data)));
         }
         const options = { paragraphLoop: true, linebreaks: true };
         if (nullGetter) options.nullGetter = nullGetter;
@@ -84,7 +90,7 @@ function generateDocxBlob(data, buffer, unknownTags = new Set()) {
             unknownTags.add(part.value);
         }
         return "";
-    });
+    }, unknownTags);
 
     try {
         // Ajout de la données custom
@@ -239,6 +245,86 @@ function transformDottedXml(xml, data) {
     return xml;
 }
 
+
+// {filtre: Table.Colonne == "valeur"} ou != ; guillemets droits, typographiques
+// ou chevrons facultatifs autour de la valeur.
+const FILTER_RE = /^filtre\s*:\s*([^\s.]+)\.(\S+?)\s*(==|!=)\s*(.*)$/i;
+
+function parseFilter(text) {
+    const m = FILTER_RE.exec(text);
+    if (!m) {
+        throw new Error(`Filtre illisible : {${text}}. Forme attendue : {filtre: Table.Colonne == "valeur"}`);
+    }
+    // Valeur telle qu'écrite dans le XML (pour l'affichage) et décodée (pour comparer)
+    const display = m[4].trim().replace(/^["“”«»'‘’]\s*/, '').replace(/\s*["“”«»'‘’]$/, '');
+    const value = display.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+    return { table: sanitizeKey(m[1]), column: sanitizeKey(m[2]), equal: m[3] === '==', display: display, value: value };
+}
+
+// Lignes de `rows` retenues par le filtre. La comparaison ignore casse, accents
+// et ponctuation (sanitizeKey) ; une liste (choix multiples, références)
+// correspond si l'un de ses éléments correspond.
+function filterRows(rows, filter) {
+    const wanted = sanitizeKey(filter.value);
+    return rows.filter((row) => {
+        const cell = row[filter.column];
+        const items = Array.isArray(cell) ? (cell[0] === 'L' ? cell.slice(1) : cell) : [cell];
+        return items.some((item) => sanitizeKey(item) === wanted) === filter.equal;
+    });
+}
+
+// Applique les filtres d'une partie du document, dans l'ordre de lecture. Un
+// tableau ouvre une portée (un filtre posé dans le tableau s'arrête avec lui),
+// {fin filtre} vide la portée en cours. Les répétitions d'une table filtrée
+// ({Table.Col}, {#Table}, {^Table}) sont redirigées vers ses lignes retenues,
+// rangées dans data sous une clé propre au filtre. ctx est partagé par les
+// parties du document ; sans données (validation à l'import), seule la
+// syntaxe des filtres est vérifiée.
+function applyFilters(xml, ctx) {
+    const scopes = [new Map()];
+    return xml.replace(/<w:tbl[ >]|<\/w:tbl>|<w:p(?:\s[^>]*)?>(?:(?!<w:p[ />])[\s\S])*?<\/w:p>/g, (token) => {
+        if (token.startsWith('<w:tbl')) {
+            scopes.push(new Map(scopes[scopes.length - 1]));
+            return token;
+        }
+        if (token === '</w:tbl>') {
+            if (scopes.length > 1) scopes.pop();
+            return token;
+        }
+        const active = scopes[scopes.length - 1];
+        let consumed = false;
+        const paragraph = token.replace(/(<w:t(?:\s[^>]*)?>)([^<]*)(<\/w:t>)/g, (_, open, text, close) =>
+            open + text.replace(/\{([^{}]+)\}/g, (tag, inner) => {
+                if (/^filtre\s*:/i.test(inner)) {
+                    const filter = parseFilter(inner);
+                    const rows = ctx.data && ctx.data[filter.table];
+                    if (Array.isArray(rows)) {
+                        const key = `__filtre${++ctx.count}`;
+                        ctx.data[key] = filterRows(rows, filter);
+                        active.set(filter.table, key);
+                    }
+                    if (ctx.data && (!Array.isArray(rows) || (rows.length && !rows.some((row) => filter.column in row)))) {
+                        ctx.unknownTags.add(`${filter.table}.${filter.column}`);
+                    }
+                    consumed = !filter.equal;
+                    return filter.equal ? filter.display : '';
+                }
+                if (inner === 'fin_filtre' || inner === '/filtre') {
+                    active.clear();
+                    consumed = true;
+                    return '';
+                }
+                const m = /^([#^/]?)([a-z0-9_]+)(\..+)?$/.exec(inner);
+                const key = m && active.get(m[2]);
+                return key ? `{${m[1]}${key}${m[3] || ''}}` : tag;
+            }) + close);
+        // Paragraphe réduit à {fin filtre} (ou à un filtre !=) : retiré, sauf dans
+        // un tableau où chaque cellule doit garder un paragraphe.
+        const empty = !/<w:t(?:\s[^>]*)?>[^<]*[^\s<]/.test(paragraph) && !/<w:(?:drawing|pict|object|sectPr)\b/.test(paragraph);
+        return consumed && empty && scopes.length === 1 ? '' : paragraph;
+    });
+}
 
 // Affichage des erreurs
 function handleDocxError(error) {
