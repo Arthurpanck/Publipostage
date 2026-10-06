@@ -160,9 +160,10 @@ function newBatch() {
 }
 
 // --- LOGIQUE MÉTIER : dispatch selon le type de modèle ---
-// Les lignes reçues de Grist contiennent toutes les colonnes, masquées
-// comprises (includeColumns: 'normal') ; les générateurs normalisent les clés.
-async function dispatchGeneration(record, batch) {
+// La ligne est complétée des colonnes que Grist n'aurait pas transmises
+// (voir completeRow) ; les générateurs normalisent les clés.
+async function dispatchGeneration(received, batch) {
+    const record = await completeRow(received, batch);
     const data = rowData(record); // retrait des métadonnées Grist
 
     if (state.templateType === 'docx') {
