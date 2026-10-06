@@ -255,22 +255,29 @@ function parseFilter(text) {
     if (!m) {
         throw new Error(`Filtre illisible : {${text}}. Forme attendue : {filtre: Table.Colonne == "valeur"}`);
     }
-    // Valeur telle qu'écrite dans le XML (pour l'affichage) et décodée (pour comparer)
-    const display = m[4].trim().replace(/^["“”«»'‘’]\s*/, '').replace(/\s*["“”«»'‘’]$/, '');
-    const value = display.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
-        .replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+    // Le texte vient du XML : entités décodées avant de retirer les guillemets
+    // (Word peut écrire &quot;), puis valeur réencodée pour l'affichage.
+    const value = m[4].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+        .replace(/&apos;/g, "'").replace(/&amp;/g, '&')
+        .trim().replace(/^["“”«»'‘’]\s*/, '').replace(/\s*["“”«»'‘’]$/, '');
+    const display = value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     return { table: sanitizeKey(m[1]), column: sanitizeKey(m[2]), equal: m[3] === '==', display: display, value: value };
+}
+
+// Clé de comparaison : sans casse, accents ni ponctuation (même en fin de valeur)
+function compareKey(value) {
+    return sanitizeKey(value).replace(/_+/g, '_').replace(/_$/, '');
 }
 
 // Lignes de `rows` retenues par le filtre. La comparaison ignore casse, accents
 // et ponctuation (sanitizeKey) ; une liste (choix multiples, références)
 // correspond si l'un de ses éléments correspond.
 function filterRows(rows, filter) {
-    const wanted = sanitizeKey(filter.value);
+    const wanted = compareKey(filter.value);
     return rows.filter((row) => {
         const cell = row[filter.column];
         const items = Array.isArray(cell) ? (cell[0] === 'L' ? cell.slice(1) : cell) : [cell];
-        return items.some((item) => sanitizeKey(item) === wanted) === filter.equal;
+        return items.some((item) => compareKey(item) === wanted) === filter.equal;
     });
 }
 

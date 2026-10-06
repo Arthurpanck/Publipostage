@@ -71,6 +71,14 @@ test('valeurs brutes de Grist : RefList/ChoiceList encodées ["L", …] et nombr
     assert.equal((await generate(body, data)).text, 'vert2;33;');
 });
 
+test('guillemets encodés par Word (&quot;) et ponctuation finale : valeur nettoyée', async () => {
+    const body = para('{filtre: BDD_SERVICES.Fonction == &quot;Service social.&quot;}') + para('{BDD_SERVICES.Nom};')
+        + para('{filtre: BDD_SERVICES.Fonction == &quot;A &amp; B&quot;}');
+    const { text, xml } = await generate(body);
+    assert.equal(text, 'Service social.Bob;Dan;A & B');
+    assert.match(xml, />A &amp; B</);
+});
+
 test('colonne ou table inconnue dans un filtre : signalée dans la pastille', async () => {
     const body = para('{filtre: BDD_SERVICES.Fonctoin == "x"}') + para('{BDD_SERVICES.Nom};') + para('{filtre: Lieux.Nom == "x"}');
     const { unknown } = await generate(body);
