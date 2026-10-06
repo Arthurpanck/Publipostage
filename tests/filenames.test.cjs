@@ -18,7 +18,7 @@ function controller() {
     vm.runInContext(fs.readFileSync(require.resolve('../main.js'), 'utf8'), app);
     vm.runInContext("state.templateBuffer = {}; state.templateType = 'docx';", app);
     app.dispatchGeneration = async () => new Blob();
-    app.refreshWarnings = () => {};
+    app.showWarnings = () => {};
     app.updatePreview = async () => {};
     return { app, saved, files, messages, onRecord, onRecords, ready, recordOptions, recordsOptions };
 }

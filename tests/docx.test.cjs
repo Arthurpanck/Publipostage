@@ -4,9 +4,10 @@ const { loadApp, template, render, xmlText, para, run } = require('./helpers.cjs
 
 test('balises simples, accents, valeurs nulles, zéro et faux', async () => {
     const app = loadApp();
-    const zip = await render(app, template(app, para('{Titre}|{Prénom}|{Vide}|{Zero}|{Faux}')), { Titre: 'Visite', Prenom: 'Élodie', Vide: null, Zero: 0, Faux: false });
+    const unknown = new Set();
+    const zip = await render(app, template(app, para('{Titre}|{Prénom}|{Vide}|{Zero}|{Faux}')), { Titre: 'Visite', Prenom: 'Élodie', Vide: null, Zero: 0, Faux: false }, unknown);
     assert.equal(xmlText(zip.file('word/document.xml').asText()), 'Visite|Élodie||0|false');
-    assert.equal(app.getUnknownTags().length, 0);
+    assert.equal(unknown.size, 0);
 });
 test('doubles accolades et balises simples peuvent coexister', async () => {
     const app = loadApp();
@@ -28,9 +29,10 @@ test('balise répartie sur des runs sans déplacer le texte voisin', async () =>
 });
 test('en-têtes et pieds de page suivent les mêmes règles', async () => {
     const app = loadApp();
-    const zip = await render(app, template(app, para('{Prénom}'), para('{{Prénom}}'), para('{Prénom}')), { Prenom: 'Élodie' });
+    const unknown = new Set();
+    const zip = await render(app, template(app, para('{Prénom}'), para('{{Prénom}}'), para('{Prénom}')), { Prenom: 'Élodie' }, unknown);
     for (const name of ['document', 'header1', 'footer1']) assert.equal(xmlText(zip.file('word/' + name + '.xml').asText()), 'Élodie');
-    assert.equal(app.getUnknownTags().length, 0);
+    assert.equal(unknown.size, 0);
 });
 for (const text of ['{{Titre}', '{Titre}}', '{{{Titre}}}', '{Titre', 'Titre}']) {
     test('rejette les accolades mal appariées : ' + text, () => {
@@ -61,9 +63,29 @@ test('boucles manuelles, conditions inversées et tableaux sans enfant', async (
 });
 test('les balises inconnues sont signalées, les entités XML préservées', async () => {
     const app = loadApp();
-    const zip = await render(app, template(app, para('A &amp; B {Inconnue} {Titre}')), { Titre: 'C & D <E>' });
+    const unknown = new Set();
+    const zip = await render(app, template(app, para('A &amp; B {Inconnue} {Titre}')), { Titre: 'C & D <E>' }, unknown);
     assert.equal(xmlText(zip.file('word/document.xml').asText()), 'A & B  C & D <E>');
-    assert.equal(app.getUnknownTags().join(','), 'inconnue');
+    assert.equal([...unknown].join(','), 'inconnue');
+});
+test('une balise pointée non résolue est vidée et signalée avec son point', async () => {
+    const app = loadApp();
+    const unknown = new Set();
+    const zip = await render(app, template(app, para('Avant {Inconnue.Nom} après') + para('{Titre}')), { Titre: 'T' }, unknown);
+    assert.equal(xmlText(zip.file('word/document.xml').asText()), 'Avant  aprèsT');
+    assert.equal([...unknown].join(','), 'inconnue.nom');
+});
+test('paragraphe ancrant une zone de texte : balises normalisées et recollées des deux côtés', async () => {
+    const app = loadApp();
+    const box = '<w:r><w:drawing><w:txbxContent>' + para('{NOM}') + '</w:txbxContent></w:drawing></w:r>';
+    const body = '<w:p>' + run('Madame {PRÉ') + '<w:r><w:rPr><w:b/></w:rPr><w:t>NOM}</w:t></w:r>' + box + '</w:p>';
+    const zip = await render(app, template(app, body), { Prenom: 'Élodie', Nom: 'DUPONT' });
+    assert.equal(xmlText(zip.file('word/document.xml').asText()), 'Madame ÉlodieDUPONT');
+});
+test('le modèle est analysé une seule fois pour toutes les générations', () => {
+    const app = loadApp();
+    const buffer = template(app, para('{Enfants.Nom}'));
+    assert.equal(app.parseTemplate(buffer), app.parseTemplate(buffer));
 });
 
 test('une table citée seulement dans l’en-tête est détectée et répétée', async () => {

@@ -4,7 +4,7 @@
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>Grist Publipostage</title>
-        <link rel="stylesheet" href="style.css?v=20261005-3">
+        <link rel="stylesheet" href="style.css?v=20261006-2">
 
         <script src="inc/grist-plugin-api.js"></script>
         <script src="inc/pizzip.js"></script>
@@ -32,9 +32,6 @@
                     </div>
 
                     <div class="modal-body">
-                        <ul class="modal-list">
-                            <li>Rendre visible toutes les colonnes dans le paramétrage "personnalisé" de la vue publipostage</li>
-                        </ul>
                         <div class="modal-hint">
                             <p>Dans le paramétrage de la colonne, c'est la valeur préfixée de <code>$</code> qu'il faut reprendre pour créer la balise dans votre document word ou PDF&nbsp;:</p>
                             <div class="modal-hint-demo">
@@ -44,10 +41,11 @@
                             </div>
                         </div>
                         <ul class="modal-list">
-                            <li>Pour publiposter les colonnes de la table principale, ajouter dans votre document Word&nbsp;<code>{NomColonne}</code> ou <code>{{NomColonne}}</code></li>
-                            <li>Pour lister les lignes d’une table liée, utiliser <code>{NomTable.NomColonne}</code>. Cette table doit contenir une colonne Référence ou Liste de références vers la table du widget. La ligne du tableau Word (ou le paragraphe) est répétée pour chaque ligne liée.</li>
+                            <li>Pour publiposter les colonnes de la table principale, ajouter dans votre document Word&nbsp;<code>{NomColonne}</code> ou <code>{{NomColonne}}</code>. Les colonnes masquées dans le widget sont aussi disponibles.</li>
+                            <li>Pour lister les lignes d’une table liée, utiliser <code>{NomTable.NomColonne}</code>. Les deux tables doivent être reliées par une colonne Référence ou Liste de références, dans l’une ou l’autre table. La ligne du tableau Word (ou le paragraphe) est répétée pour chaque ligne liée.</li>
                             <li>Pour lister les lignes de la vue du widget, utiliser son identifiant de table : <code>{NomTable.NomColonne}</code>. Les liaisons, filtres et le tri du widget sont appliqués. Une balise simple utilise toujours la ligne sélectionnée.</li>
                             <li>Depuis une table regroupée, utiliser <code>{TableSource.NomColonne}</code> pour lister les lignes du groupe. Par exemple, dans Donnees regroupée par catégorie : <code>{Donnees.Titre}</code>. La colonne group peut rester masquée.</li>
+                            <li>Pour filtrer les lignes répétées d’une table, utiliser <code>{filtre: NomTable.NomColonne == "valeur"}</code> (ou <code>!=</code>). Dans un tableau, le filtre vaut pour ce tableau ; ailleurs, jusqu’à <code>{fin filtre}</code>. La balise affiche la valeur filtrée, avec sa mise en forme. La comparaison ignore majuscules, accents et ponctuation.</li>
                             <li>Les majuscules, minuscules et accents sont normalisés dans les noms des balises. Les doubles accolades sont également acceptées pour les tables liées et les boucles. Chaque balise doit être fermée avec le même nombre d’accolades.</li>
                             <li>Pour les PDF, utiliser un formulaire avec des champs nommés d’après les identifiants des colonnes (sans accolades).</li>
                         </ul>
@@ -71,8 +69,8 @@
             <!-- ── EN-TÊTE (54px) ──────────────────────────────────── -->
             <div id="appHeader" class="hdr">
 
-                <h2 id="hdrTitle" class="hdr-title">Publipostage</h2>
-                <div id="hdrTitleSep" class="hdr-sep"></div>
+                <h2 class="hdr-title">Publipostage</h2>
+                <div class="hdr-sep"></div>
 
                 <!-- Pastille "N balises sans correspondance" -->
                 <div id="warnSlot" class="warn-slot" hidden>
@@ -88,18 +86,19 @@
                 </div>
                 <div id="warnSep" class="hdr-sep" hidden></div>
 
-                <!-- Actions : wrapper flex:1 entre deux séparateurs, boutons 50/50 -->
+                <!-- Actions : wrapper flex:1 entre deux séparateurs, boutons 50/50.
+                     Libellés courts puis repli dans la roue selon la largeur (style.css) -->
                 <div id="actionsInline" class="hdr-actions" hidden>
                     <button id="btnSingle" class="btn btn-success hdr-action" disabled>
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                        <span id="btnSingleLabel">Ligne sélectionnée</span>
+                        <span class="lbl-long">Ligne sélectionnée</span><span class="lbl-short">Ligne</span>
                     </button>
                     <button id="btnBulk" class="btn btn-primary hdr-action" disabled>
                         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
-                        <span id="btnBulkLabel">ZIP (toutes les lignes)</span>
+                        <span class="lbl-long">ZIP (toutes les lignes)</span><span class="lbl-short">Zip</span>
                     </button>
                 </div>
-                <div id="actionsSpacer" class="hdr-spacer" hidden></div>
+                <div id="actionsSpacer" class="hdr-spacer hdr-spacer-narrow" hidden></div>
                 <div id="actionsSep" class="hdr-sep" hidden></div>
 
                 <!-- Chip du modèle + roue crantée -->
@@ -113,7 +112,7 @@
                     </button>
 
                     <div id="gearMenu" class="gear-menu" hidden>
-                        <div id="gearActions" hidden>
+                        <div class="gear-actions">
                             <button id="gearDownloadLine" class="gear-item gear-item-line">
                                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#18753c" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                                 Télécharger la ligne sélectionnée
@@ -167,11 +166,11 @@
         </div>
 
         <!-- Incrémenter cette version lors des mises à jour JS/CSS pour renouveler le cache. -->
-        <script src="merge-utils.js?v=20261005-3"></script>
-        <script src="relations-tools.js?v=20261005-3"></script>
-        <script src="docx-tools.js?v=20261005-3"></script>
-        <script src="pdf-tools.js?v=20261005-3"></script>
-        <script src="ui.js?v=20261005-3"></script>
-        <script src="main.js?v=20261005-3"></script>
+        <script src="merge-utils.js?v=20261006-2"></script>
+        <script src="relations-tools.js?v=20261006-2"></script>
+        <script src="docx-tools.js?v=20261006-2"></script>
+        <script src="pdf-tools.js?v=20261006-2"></script>
+        <script src="ui.js?v=20261006-2"></script>
+        <script src="main.js?v=20261006-2"></script>
     </body>
 </html>
