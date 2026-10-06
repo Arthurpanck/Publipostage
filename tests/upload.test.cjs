@@ -13,7 +13,7 @@ function controller() {
             setOptions: async value => { events.push('save'); options = value; },
             getOption: async key => options[key], setOption: async (key, value) => { events.push('save'); options[key] = value; } },
         setTimeout() {}, initUi() {}, uiToast: (message, type) => events.push({message, type}),
-        uiCloseModal() {}, uiSetTemplate() {}, uiEnableActions() {}, uiShowPreview() {}, uiPreviewEmptyText() {},
+        uiCloseModal() {}, uiSetTemplate() {}, uiEnableActions() {}, uiShowPreview() {}, uiPreviewEmptyText() {}, uiSetWarnings() {},
         PDFLib: { PDFDocument: { load: async () => { throw new Error('PDF invalide'); } } },
     });
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8'), app);
@@ -53,8 +53,24 @@ test('le format binaire .doc est refusé avec une consigne de conversion', async
 
 test('un échec de lecture des tables liées bloque la génération au lieu de produire un document incomplet', async () => {
     const { app } = controller();
-    app.completeParentData = async () => {};
-    app.addChildTablesData = async () => { throw new Error('Accès à Enfants indisponible'); };
+    app.addLinkedTables = async () => { throw new Error('Accès à Enfants indisponible'); };
     app.updateTemplateState(template(app, para('{Enfants.Nom}')), 'relations.docx', 'docx');
-    await assert.rejects(app.dispatchGeneration({ id: 1, Titre: 'Parent' }), /Accès à Enfants indisponible/);
+    await assert.rejects(app.dispatchGeneration({ id: 1, Titre: 'Parent' }, app.newBatch()), /Accès à Enfants indisponible/);
+});
+
+test('un aperçu terminé après un aperçu plus récent n’est pas affiché', async () => {
+    const { app } = controller();
+    const container = { replaceChildren(...nodes) { this.nodes = nodes; } };
+    app.document = { getElementById: () => container, createElement: () => ({ childNodes: [] }) };
+    app.docx = { renderAsync: async (blob, page) => { page.childNodes = [blob]; } };
+    vm.runInContext("state.currentRecord = { id: 1 }; state.templateType = 'docx';", app);
+    const pending = [];
+    app.dispatchGeneration = () => new Promise(resolve => pending.push(resolve));
+    const ancien = app.updatePreview();
+    const recent = app.updatePreview();
+    pending[1]('récent');
+    await recent;
+    pending[0]('ancien');
+    await ancien;
+    assert.deepEqual(container.nodes, ['récent']);
 });

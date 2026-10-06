@@ -5,6 +5,19 @@ function sanitizeKey(value) {
         .replace(/[^a-zA-Z0-9_]+/g, '_').replace(/^_+/, '').toLowerCase();
 }
 
+// Identifiant de ligne et colonnes techniques de Grist, jamais publipostés
+const TECHNICAL_COLUMN = /^(?:id$|__|manualSort|gristHelper_)/;
+
+// Ligne Grist sans ses colonnes techniques. Les clés restent les identifiants
+// Grist : normalizeMergeData les normalise une seule fois, à la génération.
+function rowData(row) {
+    const data = {};
+    for (const key in row) {
+        if (!TECHNICAL_COLUMN.test(key)) data[key] = row[key];
+    }
+    return data;
+}
+
 function normalizeMergeData(value) {
     if (Array.isArray(value)) return value.map(normalizeMergeData);
     if (!value || Object.prototype.toString.call(value) !== '[object Object]') return value;
