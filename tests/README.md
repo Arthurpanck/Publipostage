@@ -21,6 +21,12 @@ Chaque génération (aperçu, document, ZIP) est un lot (`newBatch` dans
 `main.js`) : les tables lues, les lignes du widget et les alertes lui
 appartiennent. Les tests passent un lot explicite (`batch` dans `helpers.cjs`).
 
+Selon la version de Grist ou les colonnes associées du widget, la ligne reçue
+peut ne pas contenir toutes ses colonnes, malgré `includeColumns: 'normal'`.
+`completeRow` (`relations-tools.js`) relit alors la table du widget une fois par
+lot ; les valeurs reçues restent prioritaires. `tests/columns.test.cjs` rejoue ce
+cas avec le vrai `main.js` et un extrait du modèle de test Donnees/Lieux.
+
 ## Vérification manuelle dans Grist
 
 - Charger un DOCX contenant `{Titre}`, `{{Titre}}` et `{{Participants}}`.
@@ -97,7 +103,9 @@ La balise simple `{Service_commune_Prenom_Nom}` reste celle de la ligne
 sélectionnée. Le ZIP garde son fonctionnement par ligne : un modèle qui
 contient toute la vue y répétera cette liste dans chaque document.
 
-Ces lignes sont celles reçues par `onRecords`, sans nouvelle lecture.
+Ces lignes sont celles reçues par `onRecords`. Si Grist ne transmet pas
+toutes leurs colonnes, elles sont complétées par une lecture de la table, une
+fois par lot, sans réintroduire les lignes exclues par le widget.
 `tests/filtered-view.test.cjs` vérifie l’ordre, la restriction aux lignes
 transmises, les boucles, la vue vide et l’absence de lecture de la table.
 Pour vérifier dans Grist : brancher le widget sur la table détaillée,

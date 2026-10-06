@@ -36,6 +36,37 @@ function fetchTableCached(cache, tableId) {
 
 const WIDGET_TABLE = Symbol('widgetTable');
 const VIEW_ROWS = Symbol('viewRows');
+const ROW_INDEX = Symbol('rowIndex');
+
+// Liste encodée par fetchTable (["L", …]) -> valeur telle que reçue par le widget
+function decodeList(value) {
+    return Array.isArray(value) && value[0] === 'L' ? value.slice(1) : value;
+}
+
+// Grist peut ne transmettre au widget qu'une partie des colonnes, malgré
+// includeColumns: 'normal' (version de Grist, colonnes associées du widget) :
+// les colonnes absentes de la ligne reçue sont relues dans la table du widget,
+// une fois par lot. Les valeurs reçues restent prioritaires. En cas d'échec de
+// lecture, la ligne reçue est utilisée telle quelle.
+async function completeRow(row, batch) {
+    try {
+        const widgetTable = await cached(batch.cache, WIDGET_TABLE, () => grist.getSelectedTableId());
+        const tbl = await fetchTableCached(batch.cache, widgetTable);
+        const index = cached(batch.cache, ROW_INDEX, () => new Map(tbl.id.map((id, i) => [id, i])));
+        const i = index.get(row.id);
+        if (i === undefined) {
+            return row;
+        }
+        const full = { ...row };
+        for (const col in tbl) {
+            if (!(col in full)) full[col] = decodeList(tbl[col][i]);
+        }
+        return full;
+    } catch (e) {
+        console.warn("Impossible de compléter les colonnes de la ligne", e);
+        return row;
+    }
+}
 
 // Ligne i d'une table lue par fetchTable (format colonnes)
 function tableRow(tbl, i) {
@@ -115,8 +146,10 @@ async function addLinkedTables(data, record, tables, batch) {
     const widgetTable = await cached(batch.cache, WIDGET_TABLE, () => grist.getSelectedTableId());
     for (const table of tables) {
         if (table === sanitizeKey(widgetTable)) {
-            data[table] = cached(batch.cache, VIEW_ROWS,
-                () => batch.viewRows.filter(row => row.id !== 'new').map(rowData));
+            data[table] = await cached(batch.cache, VIEW_ROWS, async () => {
+                const rows = batch.viewRows.filter(row => row.id !== 'new');
+                return (await Promise.all(rows.map(row => completeRow(row, batch)))).map(rowData);
+            });
             continue;
         }
 

@@ -8,11 +8,15 @@ const VIEW = [
     { id: 11, Service_commune_Prenom_Nom: 'Alice' },
 ];
 
+// Table complète : la ligne 99 est exclue par le filtre du widget, et la
+// colonne Telephone n'a pas été transmise au widget.
+const TABLE = { id: [11, 23, 99], Service_commune_Prenom_Nom: ['Alice', 'Bob', 'Zoé'], Telephone: ['01', '02', '09'] };
+
 function setup() {
     let tableIdCalls = 0;
     const app = loadApp({ grist: {
         getSelectedTableId: async () => { tableIdCalls++; return 'BDD_SERVICES'; },
-        docApi: { fetchTable: async () => { throw new Error('La table entière ne doit pas être lue'); } },
+        docApi: { fetchTable: async () => TABLE },
     } });
     return { app, tableIdCalls: () => tableIdCalls };
 }
@@ -42,6 +46,12 @@ test('vue filtrée : tableau Word à doubles accolades et boucle manuelle', asyn
     assert.equal((await generate(app, buf)).text, 'BobServiceAliceServiceBob;Alice;');
 });
 
+test('colonnes non transmises : complétées depuis la table, sans réintroduire les lignes filtrées', async () => {
+    const { app } = setup();
+    const buf = template(app, para('{BDD_SERVICES.Service_commune_Prenom_Nom} {BDD_SERVICES.Telephone};'));
+    assert.equal((await generate(app, buf)).text, 'Bob 02;Alice 01;');
+});
+
 test('vue vide : la ligne de saisie n’est pas publipostée', async () => {
     const { app } = setup();
     const buf = template(app, para('{BDD_SERVICES.Service_commune_Prenom_Nom}')
@@ -49,7 +59,7 @@ test('vue vide : la ligne de saisie n’est pas publipostée', async () => {
     assert.equal((await generate(app, buf, [{ id: 'new', Service_commune_Prenom_Nom: '' }])).text, 'Aucun service');
 });
 
-test('la table du widget n’est pas interrogée pour un modèle sans balise pointée', async () => {
+test('aucune lecture des relations pour un modèle sans balise pointée', async () => {
     const { app, tableIdCalls } = setup();
     assert.equal((await generate(app, template(app, para('{Service_commune_Prenom_Nom}')))).text, 'Alice');
     assert.equal(tableIdCalls(), 0);
