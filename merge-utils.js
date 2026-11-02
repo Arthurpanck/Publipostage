@@ -33,7 +33,10 @@ function normalizeDocxTag(key) {
     // Un filtre garde sa valeur telle qu'écrite (voir applyFilters dans docx-tools.js).
     if (/^filtre\s*:/i.test(key)) return key;
     const prefix = /^[#\/^@]/.test(key) ? key[0] : '';
-    return prefix + key.slice(prefix.length).split('.').map(sanitizeKey).join('.');
+    // {Colonne|format:Option1:Option2} : chaque nom est normalisé, le | et les : restent.
+    const [name, ...format] = key.slice(prefix.length).split('|');
+    const options = format.length ? '|' + format.join('|').split(':').map(s => sanitizeKey(s.trim())).join(':') : '';
+    return prefix + name.trim().split('.').map(sanitizeKey).join('.') + options;
 }
 
 // Conserver accents et casse, mais produire un nom portable, jamais un chemin.

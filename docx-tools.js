@@ -10,6 +10,8 @@
  *     Dans une ligne de tableau : la ligne est répétée pour chaque ligne liée.
  *     Hors tableau : le paragraphe est répété pour chaque ligne liée.
  *   - Boucle manuelle docxtemplater : {#Membres}{Nom_Membre}{/Membres}.
+ *   - Mise en forme selon le type de colonne Grist, {Colonne|etapes} et
+ *     {Actuel|barre:Objectif[:Pourcentage]} : voir render-tools.js.
  *   - Filtre : {filtre: Membres.Colonne == "valeur"} (ou !=) ne garde que les
  *     lignes correspondantes de Membres dans sa portée : le tableau Word qui
  *     le contient, sinon jusqu'à {fin filtre} ou la fin du document. La
@@ -21,7 +23,7 @@
  */
 
 // Balise pointée {Table.Colonne}
-const DOTTED_TAG_SRC = '\\{([A-Za-z0-9_]+)\\.([A-Za-z0-9_À-ÿ]+)\\}';
+const DOTTED_TAG_SRC = '\\{([A-Za-z0-9_]+)\\.([A-Za-z0-9_À-ÿ]+)(?:\\|[^{}]*)?\\}';
 
 // Modèle analysé une seule fois : XML réparé (balises recollées et
 // normalisées) de chaque partie texte, et tables citées. Chaque génération
@@ -54,14 +56,14 @@ function getReferencedTables(buffer) {
 
 // Même compilation à l'import et à la génération : un modèle invalide ne doit
 // pas remplacer le dernier modèle utilisable dans les options Grist.
-function compileDocxTemplate(buffer, data, nullGetter, unknownTags = new Set()) {
+function compileDocxTemplate(buffer, data, nullGetter, unknownTags = new Set(), renders = { registry: [], unknownTags }) {
     try {
         const zip = new PizZip(buffer);
         const filters = { data: data, unknownTags: unknownTags, count: 0 };
         for (const [name, xml] of Object.entries(parseTemplate(buffer).parts)) {
             zip.file(name, withTextBoxes(xml, (part) => transformDottedXml(applyFilters(part, filters), data)));
         }
-        const options = { paragraphLoop: true, linebreaks: true };
+        const options = { paragraphLoop: true, linebreaks: true, parser: makeParser(renders) };
         if (nullGetter) options.nullGetter = nullGetter;
         return new window.docxtemplater(zip, options);
     } catch (error) {
@@ -71,8 +73,8 @@ function compileDocxTemplate(buffer, data, nullGetter, unknownTags = new Set()) 
 
 // Génération du docx. Les balises sans colonne correspondante (faute de frappe,
 // libellé au lieu de l'identifiant de colonne...) sont ajoutées à unknownTags.
-function generateDocxBlob(data, buffer, unknownTags = new Set()) {
-    data = normalizeMergeData(data);
+function generateDocxBlob(data, buffer, unknownTags = new Set(), renderInfo = null) {
+    data = attachRenderInfo(normalizeMergeData(data), renderInfo);
 
     // Clés connues : champs du parent + colonnes des tables enfants,
     // pour distinguer "cellule vide" (normal) de "balise sans colonne" (erreur)
@@ -85,12 +87,14 @@ function generateDocxBlob(data, buffer, unknownTags = new Set()) {
     }
 
     // Une cellule vide est normale ; une balise sans colonne est signalée.
+    const renders = { registry: [], unknownTags, info: renderInfo };
     const doc = compileDocxTemplate(buffer, data, (part) => {
-        if (!part.module && part.value && !connues.has(part.value)) {
-            unknownTags.add(part.value);
+        const name = part.value && splitTag(part.value).base;
+        if (!part.module && name && !connues.has(name)) {
+            unknownTags.add(name);
         }
         return "";
-    }, unknownTags);
+    }, unknownTags, renders);
 
     try {
         // Ajout de la données custom
@@ -98,6 +102,7 @@ function generateDocxBlob(data, buffer, unknownTags = new Set()) {
     } catch (error) {
         handleDocxError(error);
     }
+    applyRenders(doc.getZip(), renders.registry);
 
     return doc.getZip().generate({
         type: "blob",
@@ -191,8 +196,8 @@ function transformDottedXml(xml, data) {
 
     const estResolue = (t) => data && Array.isArray(data[t]);
     const enBoucle = (fragment, table) => fragment.replace(
-        new RegExp(`\\{${table}\\.([A-Za-z0-9_À-ÿ]+)\\}`, 'g'),
-        '{$1}'
+        new RegExp(`\\{${table}\\.([A-Za-z0-9_À-ÿ]+)((?:\\|[^{}]*)?)\\}`, 'g'),
+        '{$1$2}'
     );
 
     // 1) Lignes de tableau LES PLUS INTERNES (le garde-fou (?!<\/?w:tr[ >])

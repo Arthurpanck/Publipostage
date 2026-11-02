@@ -148,3 +148,30 @@ Pour vérifier dans Grist : un tableau dont le bandeau contient
 `{BDD_SERVICES.Nom}` ; puis une liste à puces encadrée par un filtre et
 `{fin filtre}`, suivie d’une liste non filtrée. Comparer l’aperçu, le document
 individuel et le ZIP.
+
+## Mise en forme par type de colonne
+
+`render-tools.js` lit les types des colonnes (`_grist_Tables_column`), une
+fois par lot, et met en forme les balises simples :
+
+| Type Grist | Balise | Rendu Word |
+|---|---|---|
+| Booléen | `{Mutuelle}` | ☑ ou ☐ (police Segoe UI Symbol) |
+| Choix, Choix multiples | `{Statut}` | une étiquette teintée en gras par valeur, couleur de l'option Grist |
+| Référence, Référence multiple | `{Equipe}` | étiquette avec la colonne affichée de la fiche liée ; couleur si cette colonne est un Choix, sinon gris |
+| Choix (progression) | `{Etape\|etapes}` | cercles reliés dans l'ordre des choix ; seule dans son paragraphe, un tableau, sinon une version en ligne |
+| Numérique, Entier | `{Actuel\|barre:Objectif}` ou `{Actuel\|barre:Objectif:Pourcentage}` | valeur sur une barre de fond, pourcentage à gauche (3 valeurs), objectif à droite |
+
+Les boucles et conditions (`{#Mutuelle}`) gardent la valeur brute, les textes,
+dates et nombres sans option ne changent pas. Une mise en forme inconnue ou
+mal écrite refuse le modèle à l'import ; une colonne d'option introuvable est
+signalée dans la pastille. Sans accès aux métadonnées, les valeurs restent
+brutes. Le parser docxtemplater insère un marqueur, remplacé après le rendu
+par des runs qui héritent de la mise en forme de la balise.
+
+`tests/render.test.cjs` rejoue un vrai document Grist
+(`tests/fixtures/rendus-grist.cjs` : métadonnées, couleurs, références) et
+génère de vrais DOCX. Pour vérifier dans Grist : une table avec ces types, un
+modèle contenant chaque balise, puis comparer l'aperçu, le document et le ZIP.
+La barre utilise une police à chasse fixe (Consolas) : son remplissage est
+précis à 1/20 près.

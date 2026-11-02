@@ -144,8 +144,11 @@ async function addLinkedTables(data, record, tables, batch) {
     }
 
     const widgetTable = await cached(batch.cache, WIDGET_TABLE, () => grist.getSelectedTableId());
+    // Table réelle de chaque liste, pour la mise en forme par type (render-tools.js)
+    const sources = batch.sources || (batch.sources = new Map());
     for (const table of tables) {
         if (table === sanitizeKey(widgetTable)) {
+            sources.set(table, widgetTable);
             data[table] = await cached(batch.cache, VIEW_ROWS, async () => {
                 const rows = batch.viewRows.filter(row => row.id !== 'new');
                 return (await Promise.all(rows.map(row => completeRow(row, batch)))).map(rowData);
@@ -169,6 +172,7 @@ async function addLinkedTables(data, record, tables, batch) {
         }
         try {
             data[table] = await linkedRows(batch.cache, candidates[0], record);
+            sources.set(table, candidates[0].tableId);
         } catch (error) {
             throw new Error(`Impossible de lire la table liée "${table}" : ${error.message}`);
         }

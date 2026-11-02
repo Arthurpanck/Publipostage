@@ -43,6 +43,7 @@
                         <ul class="modal-list">
                             <li>Pour publiposter les colonnes de la table principale, ajouter dans votre document Word&nbsp;<code>{NomColonne}</code>. Les colonnes masquées dans le widget sont aussi disponibles.</li>
                             <li>Pour lister les lignes d’une table liée, utiliser <code>{TableLiée.NomColonne}</code>. Les deux tables doivent être reliées par une colonne Référence ou Liste de références, dans l’une ou l’autre table. La ligne du tableau Word (ou le paragraphe) est répétée pour chaque ligne liée.</li>
+                            <li>La mise en forme suit le type de la colonne Grist : Booléen en case à cocher, Choix, Choix multiples, Référence et Référence multiple en étiquettes aux couleurs de Grist. Pour une progression, <code>{Etape|etapes}</code> (ordre des choix de la colonne). Pour une barre, <code>{Actuel|barre:Objectif}</code> ou <code>{Actuel|barre:Objectif:Pourcentage}</code>, avec des noms de colonnes.</li>
                             <li>Pour découvrir les autres fonctionnalités de manière dynamique, voici un <a href="https://grist.numerique.gouv.fr/o/docs/tJsDAr7yBZwV/PublipostageDemonsration?utm_id=share-doc" target="_blank" rel="noopener">document Grist explicatif</a>.</li>
                         </ul>
                     </div>
@@ -164,6 +165,7 @@
         <!-- Incrémenter cette version lors des mises à jour JS/CSS pour renouveler le cache. -->
         <script src="merge-utils.js?v=20261006-4"></script>
         <script src="relations-tools.js?v=20261006-4"></script>
+        <script src="render-tools.js?v=20261102-1"></script>
         <script src="docx-tools.js?v=20261006-4"></script>
         <script src="pdf-tools.js?v=20261006-4"></script>
         <script src="ui.js?v=20261006-4"></script>

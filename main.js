@@ -170,7 +170,9 @@ async function dispatchGeneration(received, batch) {
         // Ajout des tables liées si le modèle contient des balises
         // {Table.Colonne} (voir relations-tools.js)
         await addLinkedTables(data, record, getReferencedTables(state.templateBuffer), batch);
-        return generateDocxBlob(data, state.templateBuffer, batch.unknownTags);
+        // Types et couleurs des colonnes Grist (voir render-tools.js)
+        const renderInfo = await loadRenderInfo(batch);
+        return generateDocxBlob(data, state.templateBuffer, batch.unknownTags, renderInfo);
     } else if (state.templateType === 'pdf') {
         return await generatePdfBlob(data, state.templateBuffer);
     }
