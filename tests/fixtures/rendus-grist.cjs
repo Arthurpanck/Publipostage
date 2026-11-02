@@ -25,6 +25,9 @@ const COLS = [
     [24, 4, 'Pole_equipe', 'Ref:Equipes', 'Pôle', '', 7],
     [25, 4, 'Collegues', 'RefList:Personnes', 'Collègues', '', 9],
     [29, 4, 'Photo', 'Attachments', 'Photo', W({ widget: 'Attachments', height: '36' }), 0],
+    // Colonne du même nom que la table liée, comme Lieux dans la démonstration
+    [30, 4, 'Personnes', 'RefList:Personnes', 'Personnes', '', 9],
+    [31, 2, 'Logo', 'Attachments', 'Logo', '', 0],
 ];
 const columns = rows => Object.fromEntries(Object.keys(rows[0]).map(k => [k, rows.map(r => r[k])]));
 const TABLES = {
@@ -36,15 +39,15 @@ const TABLES = {
     _grist_Attachments: { id: [1, 2], fileName: ['portrait.png', 'contrat.pdf'], fileSize: [68, 9000], imageWidth: [800, 0], imageHeight: [600, 0] },
     _grist_DocInfo: { id: [1], documentSettings: [W({ locale: 'fr-FR', engine: 'python3' })] },
     Equipes: columns([
-        { id: 1, Nom: 'Talents', Pole: 'RH' }, { id: 2, Nom: 'Maintenance', Pole: 'Technique' }, { id: 3, Nom: 'Comptabilité', Pole: 'Finance' }]),
+        { id: 1, Nom: 'Talents', Pole: 'RH', Logo: ['L', 1] }, { id: 2, Nom: 'Maintenance', Pole: 'Technique', Logo: null }, { id: 3, Nom: 'Comptabilité', Pole: 'Finance', Logo: null }]),
     Personnes: columns([
         { id: 1, Nom: 'Julien Petit', Fonction: 'Gestionnaire de paie' }, { id: 2, Nom: 'Inès Garnier', Fonction: 'Juriste social' }, { id: 3, Nom: 'Hugo Lemaire', Fonction: 'Technicien' }]),
 };
 // Lignes telles que reçues par le widget (onRecords : valeurs décodées)
 const RECORDS = [
-    { id: 1, Nom: 'Camille Durand', Statut: 'CDI', Competences: ['Sourcing', 'Entretiens', 'Anglais'], Etape: 'Accueil', Mutuelle: true, Teletravail: false, Salaire: 2450, Objectif: 4000, Taux: 0.6125, Conges_pris: 18, Conges_acquis: 25, Equipe: 1, Pole_equipe: 1, Collegues: [1, 2], Photo: [1, 2] },
-    { id: 2, Nom: 'Karim Benali', Statut: 'CDD', Competences: ['LinkedIn Recruiter'], Etape: 'Offre', Mutuelle: false, Teletravail: true, Salaire: 2100, Objectif: 2000, Taux: 1.05, Conges_pris: 5, Conges_acquis: 25, Equipe: 2, Pole_equipe: 2, Collegues: [3], Photo: null },
-    { id: 3, Nom: 'Sophie de la Tour', Statut: "Période d'essai", Competences: null, Etape: 'Autonome', Mutuelle: true, Teletravail: true, Salaire: 3100, Objectif: 4000, Taux: 0.775, Conges_pris: 0, Conges_acquis: 4, Equipe: 3, Pole_equipe: 3, Collegues: null, Photo: null },
+    { id: 1, Nom: 'Camille Durand', Statut: 'CDI', Competences: ['Sourcing', 'Entretiens', 'Anglais'], Etape: 'Accueil', Mutuelle: true, Teletravail: false, Salaire: 2450, Objectif: 4000, Taux: 0.6125, Conges_pris: 18, Conges_acquis: 25, Equipe: 1, Pole_equipe: 1, Collegues: [1, 2], Photo: [1, 2], Personnes: [1, 2] },
+    { id: 2, Nom: 'Karim Benali', Statut: 'CDD', Competences: ['LinkedIn Recruiter'], Etape: 'Offre', Mutuelle: false, Teletravail: true, Salaire: 2100, Objectif: 2000, Taux: 1.05, Conges_pris: 5, Conges_acquis: 25, Equipe: 2, Pole_equipe: 2, Collegues: [3], Photo: null, Personnes: null },
+    { id: 3, Nom: 'Sophie de la Tour', Statut: "Période d'essai", Competences: null, Etape: 'Autonome', Mutuelle: true, Teletravail: true, Salaire: 3100, Objectif: 4000, Taux: 0.775, Conges_pris: 0, Conges_acquis: 4, Equipe: 3, Pole_equipe: 3, Collegues: null, Photo: null, Personnes: null },
 ];
 const encode = v => (Array.isArray(v) ? ['L', ...v] : v);
 TABLES.Salaries = Object.fromEntries(Object.keys(RECORDS[0]).map(k => [k, RECORDS.map(r => encode(r[k]))]));

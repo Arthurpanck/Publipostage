@@ -199,3 +199,31 @@ test('pièces jointes dans une cellule : réduites à la largeur de la cellule',
     const { xml } = await generate(`<w:tbl><w:tr>${cell}</w:tr></w:tbl>`);
     assert.match(xml, /<wp:extent cx="1524000" cy="1143000"\/>/); // (2616 - 216) / 15 = 160 px de large
 });
+
+test('colonne du même nom que la table liée : pilules et fiches liées ensemble', async () => {
+    const { xml } = await generate(para('{Personnes}') + para('{Personnes.Nom} : {Personnes.Fonction}'));
+    assert.deepEqual(alts(xml), ['Julien Petit', 'Inès Garnier']);
+    assert.equal(xmlText(xml), ' Julien Petit : Gestionnaire de paieInès Garnier : Juriste social'); // espace entre les deux pilules
+});
+
+test('pièces jointes d’une table liée', async () => {
+    const { xml, urls } = await generate(para('{Equipes.Nom} {Equipes.Logo}'));
+    assert.deepEqual(alts(xml), ['portrait.png']);
+    assert.equal(urls.length, 1);
+});
+
+test('relations auto-fermantes des vrais modèles Word : l’image est bien reliée', async () => {
+    const drawings = [];
+    const app = loadApp({ grist: gristMock(), atob, fetch: fetchMock(), document: fakeDocument(drawings) });
+    const zip = new app.PizZip(template(app, para('Corps'), '', para('{Statut}')));
+    zip.file('word/_rels/footer1.xml.rels', '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>');
+    Object.assign(app, { __rec: RECORDS[0], __buffer: zip.generate({ type: 'uint8array' }), __batch: { cache: new Map(), viewRows: RECORDS, unknownTags: new Set(), notes: new Set() } });
+    const blob = await vm.runInContext(`(async () => {
+        const data = rowData(__rec);
+        return generateDocxBlob(data, __buffer, __batch.unknownTags, await loadRenderInfo(__batch));
+    })()`, app);
+    const out = new app.PizZip(await blob.arrayBuffer());
+    const rels = out.file('word/_rels/footer1.xml.rels').asText();
+    const rId = /r:embed="(\w+)"/.exec(out.file('word/footer1.xml').asText())[1];
+    assert.match(rels, new RegExp(`<Relationship Id="${rId}" [^>]*Target="media/rendu_1.png"/></Relationships>`));
+});

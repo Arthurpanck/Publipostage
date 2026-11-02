@@ -82,7 +82,9 @@ async function tableSpec(batch, meta, tableId) {
         const opts = parseWidgetOptions(cols.widgetOptions[i]);
         const s = { type: kind || cols.type[i], label: cols.label ? cols.label[i] : colId, opts };
         if (kind) {
-            s.refs = await refDisplay(batch, meta, target, byRowId.get(cols.visibleCol ? cols.visibleCol[i] : 0));
+            const visible = byRowId.get(cols.visibleCol ? cols.visibleCol[i] : 0);
+            s.refs = await refDisplay(batch, meta, target, visible);
+            s.visibleKey = visible === undefined ? null : sanitizeKey(cols.colId[visible]);
         }
         spec[sanitizeKey(colId)] = s;
     }
@@ -227,9 +229,15 @@ function renderer(ctx, { value, spec, format, args, tag, lookup }) {
             return { raw: files.map(f => f.name).join(', '), inline: (rPr, env) => attachmentRuns(rPr, env, files) };
         }
         case 'Ref':
-        case 'RefList':
-            return tags(refIds(value).map(id => (spec.refs && spec.refs.get(id)) || { text: String(id), style: null })
-                .filter(r => r.text !== ''));
+        case 'RefList': {
+            // Colonne homonyme de la table liée ({Lieux} avec {Lieux.Nom}) : la valeur est
+            // devenue la liste des lignes liées ; leur colonne affichée donne le texte.
+            const linked = listValue(value).filter(v => v && typeof v === 'object' && !('id' in v));
+            const items = linked.length
+                ? linked.map(row => ({ text: String((spec.visibleKey && row[spec.visibleKey]) ?? ''), style: null }))
+                : refIds(value).map(id => (spec.refs && spec.refs.get(id)) || { text: String(id), style: null });
+            return tags(items.filter(r => r.text !== ''));
+        }
         default:
             return null;
     }
@@ -416,13 +424,16 @@ function drawCheckbox(draw, checked, px) {
 }
 
 // [61 %] [ 2 450,00 €  ░░░░] sur 4 000,00 € : mono 10,5 pt, barre 260 px arrondie
-function drawBar(draw, text, fraction, pctText, goalText, px) {
+function drawBar(draw, text, fraction, pctText, goalText, px, maxW = Infinity) {
     const k = px / BODY_PX, fs = 14 * k, font = `400 ${fs}px ${MONO}`;
     const padX = 10 * k, padY = 5 * k, gap = 10 * k, h = Math.round(fs * 1.15 + 2 * padY);
-    const barW = Math.max(260 * k, draw.measure(font, text) + 2 * padX + 30 * k);
     const pctW = pctText ? Math.max(3.2 * fs, draw.measure(font, pctText)) : 0;
     const goal = 'sur ' + goalText;
-    const w = (pctText ? pctW + gap : 0) + barW + gap + draw.measure(font, goal);
+    const around = (pctText ? pctW + gap : 0) + gap + draw.measure(font, goal);
+    // 260 px comme la maquette, réduite si la place manque (cellule de tableau)
+    const minBar = draw.measure(font, text) + 2 * padX + 10 * k;
+    const barW = Math.max(minBar, Math.min(260 * k, maxW - around));
+    const w = around + barW;
     const x0 = pctText ? pctW + gap : 0;
     const f = Math.min(Math.max(fraction, 0), 1), over = isOver(fraction);
     return draw.paint(w, h, g => {
@@ -527,14 +538,14 @@ function barImage(rPr, env, actual, goal, pct, info) {
     if (!isFinite(fraction)) fraction = 0;
     const pctText = pct ? formatNumber(fraction, { opts: { numMode: 'percent', maxDecimals: (pct.spec && pct.spec.opts && pct.spec.opts.maxDecimals) || 0 } }, info) : null;
     const text = formatNumber(actual.value, actual.spec, info), goalText = formatNumber(goal.value, goal.spec, info);
-    const img = drawBar(env.draw, text, fraction, pctText, goalText, fontPx(rPr));
+    const img = drawBar(env.draw, text, fraction, pctText, goalText, fontPx(rPr), env.width());
     return imageRun(rPr, env, img, `${pctText ? pctText + ' ' : ''}${text} sur ${goalText}`);
 }
 
 // Dans une phrase : chaque étape prend la place de son libellé
 function stepsInline(rPr, env, choices, current, fill) {
     const font = `700 11.33px ${SANS}`;
-    const step = Math.max(64, ...choices.map(c => env.draw.measure(font, String(c)) + 14));
+    const step = Math.min(100, Math.max(64, ...choices.map(c => env.draw.measure(font, String(c)) + 14)));
     const img = drawSteps(env.draw, choices, current, fill, Math.min(step * choices.length, env.width()));
     return imageRun(rPr, env, img, choices.map((c, i) => (i === current ? `[${c}]` : c)).join(' > '));
 }
@@ -566,8 +577,8 @@ async function loadAttachments(batch, data, info) {
     };
     scan(data, info.root);
     for (const [key, spec] of info.byKey) {
-        const rows = Object.keys(data).find(k => sanitizeKey(k) === key);
-        if (rows && Array.isArray(data[rows])) data[rows].forEach(row => scan(row, spec));
+        // data[clé normalisée] : lignes liées (une colonne homonyme garde son nom d'origine)
+        if (Array.isArray(data[key])) data[key].forEach(row => scan(row, spec));
     }
     if (!wanted.size) return;
     const meta = await fetchTableCached(batch.cache, '_grist_Attachments');
@@ -641,7 +652,9 @@ function mediaStore(zip) {
                     const target = files.get(media.key);
                     if (!rels.has(relsPath)) {
                         const f = zip.file(relsPath);
-                        rels.set(relsPath, { xml: f ? f.asText() : '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>', ids: new Map() });
+                        const xml = f ? f.asText() : '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>';
+                        // Word écrit parfois <Relationships …/> quand la partie n'a encore aucune relation
+                        rels.set(relsPath, { xml: xml.replace(/<Relationships([^>]*?)\s*\/>/, '<Relationships$1></Relationships>'), ids: new Map() });
                     }
                     const r = rels.get(relsPath);
                     if (!r.ids.has(target)) {
