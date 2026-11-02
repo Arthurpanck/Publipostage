@@ -54,6 +54,12 @@ Vérifier leur configuration avant de conclure à une erreur de sélection.
 
 ## Relations
 
+Grist transmet au widget la valeur affichée d'une colonne Référence (« Claire
+Martin ») et non son id, dès qu'elle a une colonne affichée
+(`expandRefs`, voir `app/client/components/WidgetFrame.ts` dans grist-core) :
+les ids sont alors relus dans la table qui porte la colonne. Une colonne sans
+colonne affichée (`group` d'un regroupement) arrive en ids et n'est pas relue.
+
 Les tests simulent les réponses Grist (Ref, RefList, métadonnées), puis passent
 les données dans le vrai moteur DOCX. Ils couvrent le filtrage des enfants,
 les parents sans enfant, les boucles manuelles, le cache par lot, les erreurs

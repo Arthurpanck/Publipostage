@@ -91,7 +91,9 @@ async function findLinks(cache, widgetTable, table) {
     cols.id.forEach((_, i) => {
         const [, kind, target] = /^(Ref|RefList):(.+)$/.exec(cols.type[i]) || [];
         const owner = tableIds.get(cols.parentId[i]);
-        const link = { column: cols.colId[i], isList: kind === 'RefList' };
+        // displayed : Grist transmet au widget la valeur affichée, pas l'id
+        const displayed = Boolean(cols.visibleCol && cols.visibleCol[i]);
+        const link = { column: cols.colId[i], isList: kind === 'RefList', ownerTable: owner, displayed };
         if (target === widgetTable && sanitizeKey(owner) === table) {
             links.push({ ...link, tableId: owner, child: true });
         } else if (owner === widgetTable && target && sanitizeKey(target) === table) {
@@ -116,9 +118,19 @@ async function linkedRows(cache, link, record) {
         });
     }
 
-    // Valeur décodée par Grist : Ref = id ou 0, RefList = [id, ...] ou null.
-    // Le widget peut aussi recevoir la fiche liée développée ({ id, … }).
-    const value = record[link.column];
+    // Une référence avec colonne affichée arrive au widget sous sa valeur
+    // affichée (« Claire Martin », pas l'id) : les ids sont relus dans la table
+    // qui porte la colonne (déjà lue par completeRow). Sinon, valeur reçue.
+    let value = record[link.column];
+    if (link.displayed) {
+        try {
+            const own = await fetchTableCached(cache, link.ownerTable);
+            const i = own.id.indexOf(record.id);
+            if (i >= 0 && link.column in own) value = decodeList(own[link.column][i]);
+        } catch (e) {
+            // table illisible : valeur reçue par le widget
+        }
+    }
     if (value === undefined) {
         throw new Error(`La colonne "${link.column}" n'a pas été transmise au widget.`);
     }

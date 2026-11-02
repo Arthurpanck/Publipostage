@@ -242,13 +242,19 @@ function renderer(ctx, { value, spec, format, args, tag, lookup }) {
         }
         case 'Ref':
         case 'RefList': {
-            // Colonne homonyme de la table liée ({Lieux} avec {Lieux.Nom}) : la valeur est
-            // devenue la liste des lignes liées ; leur colonne affichée donne le texte.
-            const linked = listValue(value).filter(v => v && typeof v === 'object' && !('id' in v));
-            const items = linked.length
-                ? linked.map(row => ({ text: String((spec.visibleKey && row[spec.visibleKey]) ?? ''), style: null }))
-                : refIds(value).map(id => (spec.refs && spec.refs.get(id)) || { text: String(id), style: null });
-            return tags(items.filter(r => r.text !== ''));
+            // Selon la provenance, une référence arrive sous la forme de sa valeur
+            // affichée (ligne du widget, par défaut dans Grist), de son id (tables
+            // relues), d'une fiche { id, … }, ou d'une ligne liée sans id quand la
+            // colonne porte le nom de la table liée ({Lieux} avec {Lieux.Nom}).
+            const text = v => {
+                if (v && typeof v === 'object') {
+                    if ('id' in v) return ((spec.refs && spec.refs.get(v.id)) || {}).text || '';
+                    return String((spec.visibleKey && v[spec.visibleKey]) ?? '');
+                }
+                if (Number.isInteger(v)) return v > 0 ? ((spec.refs && spec.refs.get(v)) || { text: String(v) }).text : '';
+                return v == null ? '' : String(v);
+            };
+            return tags(listValue(value).map(v => ({ text: text(v), style: null })).filter(r => r.text !== ''));
         }
         default:
             return null;

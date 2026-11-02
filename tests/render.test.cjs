@@ -248,3 +248,20 @@ test('taille d’image sur une colonne qui n’est pas une pièce jointe : signa
     const app = loadApp();
     assert.throws(() => app.compileDocxTemplate(template(app, para('{Photo|petit:3}'))), /Erreur Template Word/);
 });
+
+// Ce que Grist transmet réellement au widget (expandRefs, par défaut) : la valeur
+// affichée des références, pas leur id (app/client/components/WidgetFrame.ts).
+const AS_GRIST_SENDS = { ...RECORDS[0], Equipe: 'Talents', Pole_equipe: 'RH', Collegues: ['Julien Petit', 'Inès Garnier'], Personnes: ['Julien Petit', 'Inès Garnier'] };
+
+test('références reçues sous leur valeur affichée : étiquettes et fiches liées', async () => {
+    const body = para('{Equipe} {Collegues}') + para('{Equipes.Pole} · {Equipes.Logo|petit}') + para('{Personnes.Nom} : {Personnes.Fonction}');
+    const { xml, unknown } = await generate(body, AS_GRIST_SENDS);
+    assert.deepEqual(alts(xml), ['Talents', 'Julien Petit', 'Inès Garnier', 'RH', 'portrait.png']);
+    assert.match(xmlText(xml), /Julien Petit : Gestionnaire de paieInès Garnier : Juriste social$/);
+    assert.deepEqual(unknown, []);
+});
+
+test('colonne du même nom que la table liée, reçue sous sa valeur affichée', async () => {
+    const { xml } = await generate(para('{Personnes}') + para('{Personnes.Nom}'), AS_GRIST_SENDS);
+    assert.deepEqual(alts(xml), ['Julien Petit', 'Inès Garnier']);
+});
