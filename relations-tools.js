@@ -116,12 +116,15 @@ async function linkedRows(cache, link, record) {
         });
     }
 
-    // Valeur décodée par Grist : Ref = id ou 0, RefList = [id, ...] ou null
+    // Valeur décodée par Grist : Ref = id ou 0, RefList = [id, ...] ou null.
+    // Le widget peut aussi recevoir la fiche liée développée ({ id, … }).
     const value = record[link.column];
     if (value === undefined) {
         throw new Error(`La colonne "${link.column}" n'a pas été transmise au widget.`);
     }
-    const ids = link.isList ? value || [] : [value].filter(Boolean);
+    const asId = v => (v && typeof v === 'object' && !Array.isArray(v) && 'id' in v ? v.id : v);
+    const list = link.isList ? value || [] : [value];
+    const ids = Array.isArray(list) ? list.map(asId).filter(Boolean) : list;
     if (!Array.isArray(ids) || !ids.every(id => Number.isInteger(id) && id > 0)) {
         throw new Error(`La colonne "${link.column}" contient des références invalides.`);
     }

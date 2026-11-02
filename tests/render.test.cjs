@@ -227,3 +227,9 @@ test('relations auto-fermantes des vrais modèles Word : l’image est bien reli
     const rId = /r:embed="(\w+)"/.exec(out.file('word/footer1.xml').asText())[1];
     assert.match(rels, new RegExp(`<Relationship Id="${rId}" [^>]*Target="media/rendu_1.png"/></Relationships>`));
 });
+
+test('référence reçue développée par Grist ({ id, … }) : fiche liée et étiquette', async () => {
+    const record = { ...RECORDS[0], Equipe: { id: 1, Nom: 'Talents', Pole: 'RH' } };
+    const { xml } = await generate(para('{Equipe} · {Equipes.Pole}'), record);
+    assert.deepEqual(alts(xml), ['Talents', 'RH']);
+});
