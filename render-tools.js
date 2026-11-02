@@ -95,7 +95,7 @@ async function tableSpec(batch, meta, tableId) {
     return spec;
 }
 
-// id -> { text, fill } pour les fiches de la table liée
+// id -> { text, style } pour les fiches de la table liée (étiquettes grises)
 async function refDisplay(batch, meta, tableId, visibleIndex) {
     const { cols } = meta;
     const tbl = await fetchTableCached(batch.cache, tableId);
@@ -104,14 +104,14 @@ async function refDisplay(batch, meta, tableId, visibleIndex) {
     tbl.id.forEach((id, i) => {
         const raw = visibleCol ? tbl[visibleCol][i] : id;
         const text = Array.isArray(raw) ? raw.slice(raw[0] === 'L' ? 1 : 0).join(', ') : raw;
-        map.set(id, { text: text == null ? '' : String(text), style: null }); // références : étiquette grise
+        map.set(id, { text: text == null ? '' : String(text), style: null });
     });
     return map;
 }
 
 function choiceStyle(opts, value) {
     const o = opts && opts.choiceOptions && opts.choiceOptions[value];
-    return o ? { fill: o.fillColor, text: o.textColor } : null;
+    return o ? { fill: o.fillColor } : null;
 }
 
 // Rattache les spécifications aux données normalisées (racine et lignes liées)
@@ -467,8 +467,8 @@ function drawBar(draw, text, fraction, pctText, goalText, px, maxW = Infinity) {
 // Cercles reliés : 20 px, bordure 2 px, ✓ dans les étapes franchies, halo sur
 // l'étape en cours, libellés 8,5 pt dessous. Largeur : celle du paragraphe.
 function drawSteps(draw, choices, current, fill, width) {
-    const n = choices.length, k = 1, D = 20 * k, R = D / 2, halo = 3 * k;
-    const lfs = 11.33 * k, top = halo + 1, cy = top + R, ly = top + D + 5 * k;
+    const n = choices.length, D = 20, R = D / 2, halo = 3;
+    const lfs = 11.33, top = halo + 1, cy = top + R, ly = top + D + 5;
     const h = Math.ceil(ly + lfs * 1.35 + 2);
     const accent = css(accentColor(fill)), grey = '#D5DADF', haloColor = css(toHex(mix(hexToRgb(accentColor(fill)), [255, 255, 255], 0.8)));
     const step = width / n, x = i => (i + 0.5) * step;
@@ -476,17 +476,17 @@ function drawSteps(draw, choices, current, fill, width) {
     return draw.paint(width, h, g => {
         for (let i = 1; i < n; i++) {
             g.fillStyle = current >= 0 && i <= current ? accent : grey;
-            g.fillRect(x(i - 1), cy - k, x(i) - x(i - 1), 2 * k);
+            g.fillRect(x(i - 1), cy - 1, x(i) - x(i - 1), 2);
         }
         choices.forEach((label, i) => {
             const s = state(i);
             if (s === 'cur') { g.beginPath(); g.arc(x(i), cy, R + halo, 0, 2 * Math.PI); g.fillStyle = haloColor; g.fill(); }
-            g.beginPath(); g.arc(x(i), cy, R - k, 0, 2 * Math.PI);
+            g.beginPath(); g.arc(x(i), cy, R - 1, 0, 2 * Math.PI);
             g.fillStyle = s === 'done' ? accent : '#FFFFFF'; g.fill();
-            g.lineWidth = 2 * k; g.strokeStyle = s === 'next' ? grey : accent; g.stroke();
+            g.lineWidth = 2; g.strokeStyle = s === 'next' ? grey : accent; g.stroke();
             if (s === 'done') {
-                g.beginPath(); g.moveTo(x(i) - 4.2 * k, cy + 0.2 * k); g.lineTo(x(i) - 1.2 * k, cy + 3.2 * k); g.lineTo(x(i) + 4.6 * k, cy - 3.4 * k);
-                g.lineWidth = 1.8 * k; g.strokeStyle = '#FFFFFF'; g.lineCap = 'round'; g.lineJoin = 'round'; g.stroke();
+                g.beginPath(); g.moveTo(x(i) - 4.2, cy + 0.2); g.lineTo(x(i) - 1.2, cy + 3.2); g.lineTo(x(i) + 4.6, cy - 3.4);
+                g.lineWidth = 1.8; g.strokeStyle = '#FFFFFF'; g.lineCap = 'round'; g.lineJoin = 'round'; g.stroke();
             }
             g.font = `${s === 'cur' ? 700 : 400} ${lfs}px ${SANS}`;
             g.fillStyle = s === 'cur' ? '#1F1F1F' : '#777777'; g.textAlign = 'center'; g.textBaseline = 'top';
@@ -507,15 +507,15 @@ function tagColors(fill) {
     return { bg: toHex(mix(rgb, [255, 255, 255], 0.84)), fg: toHex(mix(rgb, [0, 0, 0], 0.4)) };
 }
 
+// Propriétés du texte de la balise qui n'ont pas de sens sur une image
+const NOT_ON_IMAGES = { 'w:shd': null, 'w:highlight': null, 'w:u': null, 'w:bdr': null };
+
 // Image en ligne, centrée sur le texte (abaissée avec w:position)
 function imageRun(rPr, env, img, alt) {
     const rel = env.media.add({ key: img.data, data: img.data, ext: 'png' });
     const fontPt = fontPx(rPr) * 0.75, hPt = img.h * 0.75;
     const lower = Math.max(0, Math.round((hPt / 2 - 0.33 * fontPt) * 2));
-    const props = mergeRPr(rPr, {
-        'w:position': lower ? `<w:position w:val="-${lower}"/>` : null,
-        'w:shd': null, 'w:highlight': null, 'w:u': null, 'w:bdr': null,
-    });
+    const props = mergeRPr(rPr, { ...NOT_ON_IMAGES, 'w:position': lower ? `<w:position w:val="-${lower}"/>` : null });
     return `<w:r>${props}${drawingXml(rel, img, alt)}</w:r>`;
 }
 
@@ -554,12 +554,21 @@ function barImage(rPr, env, actual, goal, pct, info) {
     return imageRun(rPr, env, img, `${pctText ? pctText + ' ' : ''}${text} sur ${goalText}`);
 }
 
+const stepsAlt = (choices, current) => choices.map((c, i) => (i === current ? `[${c}]` : c)).join(' > ');
+
 // Dans une phrase : chaque étape prend la place de son libellé
 function stepsInline(rPr, env, choices, current, fill) {
     const font = `700 11.33px ${SANS}`;
     const step = Math.min(100, Math.max(64, ...choices.map(c => env.draw.measure(font, String(c)) + 14)));
     const img = drawSteps(env.draw, choices, current, fill, Math.min(step * choices.length, env.width()));
-    return imageRun(rPr, env, img, choices.map((c, i) => (i === current ? `[${c}]` : c)).join(' > '));
+    return imageRun(rPr, env, img, stepsAlt(choices, current));
+}
+
+// Seule dans son paragraphe : frise sur toute la largeur, dans le paragraphe d'origine
+function stepsImage(env, pPr, choices, current, fill) {
+    const img = drawSteps(env.draw, choices, current, fill, env.width());
+    const rel = env.media.add({ key: img.data, data: img.data, ext: 'png' });
+    return `<w:p>${pPr}<w:r>${drawingXml(rel, img, stepsAlt(choices, current))}</w:r></w:p>`;
 }
 
 // Pièces jointes : images à leur taille, réduites à la largeur disponible (page
@@ -571,7 +580,7 @@ function attachmentRuns(rPr, env, files, maxHeight = IMAGE_SIZES.grand) {
         const scale = Math.min(1, env.width() / file.w, maxHeight / file.h);
         const img = { w: Math.round(file.w * scale), h: Math.round(file.h * scale) };
         const rel = env.media.add({ key: 'pj:' + file.id, bytes: file.bytes, ext: file.ext });
-        return `<w:r>${mergeRPr(rPr, { 'w:shd': null, 'w:highlight': null, 'w:u': null, 'w:bdr': null })}${drawingXml(rel, img, file.name)}</w:r>`;
+        return `<w:r>${mergeRPr(rPr, NOT_ON_IMAGES)}${drawingXml(rel, img, file.name)}</w:r>`;
     }).join(runXml(rPr, {}, ' '));
 }
 
@@ -621,13 +630,6 @@ async function downloadAttachment(id) {
     const response = await fetch(`${token.baseUrl}/attachments/${id}/download?auth=${token.token}`);
     if (!response.ok) throw new Error(`Pièce jointe ${id} : ${response.status}`);
     return response.arrayBuffer();
-}
-
-function stepsImage(env, pPr, choices, current, fill) {
-    const img = drawSteps(env.draw, choices, current, fill, env.width());
-    const rel = env.media.add({ key: img.data, data: img.data, ext: 'png' });
-    const alt = choices.map((c, i) => (i === current ? `[${c}]` : c)).join(' > ');
-    return `<w:p>${pPr}<w:r>${drawingXml(rel, img, alt)}</w:r></w:p>`;
 }
 
 const IMAGE_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', bmp: 'image/bmp' };
@@ -713,13 +715,13 @@ function applyRenders(zip, registry) {
         const xml = file.asText();
         if (xml.indexOf(MARK_OPEN) < 0) continue;
         const env = { draw, media: media && media.forPart(file.name), width: () => pageWidth };
-        zip.file(file.name, withTextBoxes(xml, part => replaceRuns(replaceBlocks(part, registry, env, pageWidth), registry, env)));
+        zip.file(file.name, withTextBoxes(xml, part => replaceRuns(replaceBlocks(part, registry, env), registry, env)));
     }
     if (media) media.flush();
 }
 
 // Paragraphe ne contenant qu'un marqueur à rendu bloc : remplacé par le bloc
-function replaceBlocks(xml, registry, env, pageWidth) {
+function replaceBlocks(xml, registry, env) {
     return xml.replace(/<w:p(?:\s[^>]*)?>(?:(?!<w:p[ />])[\s\S])*?<\/w:p>(<\/w:tc>)?/g, (paragraph, cellEnd, offset) => {
         const texts = [...paragraph.matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g)].map(m => m[1]).join('');
         const m = /^\s*(\d+)\s*$/.exec(texts);
@@ -727,7 +729,7 @@ function replaceBlocks(xml, registry, env, pageWidth) {
         if (!render || !render.block || !env.draw || /<w:(?:drawing|pict|object|sectPr)\b/.test(paragraph)) return paragraph;
         // Image dans le paragraphe d'origine (alignement, espacement conservés)
         const pPr = (/^<w:p(?:\s[^>]*)?>\s*(<w:pPr>[\s\S]*?<\/w:pPr>)/.exec(paragraph) || [])[1] || '';
-        const width = cellWidthPx(xml, offset, pageWidth);
+        const width = cellWidthPx(xml, offset, env.width());
         return render.block({ ...env, width: () => width }, pPr) + (cellEnd || '');
     });
 }
