@@ -16,7 +16,7 @@ const TABLES = { Donnees: DONNEES,
 // Contrôleur réel (main.js) avec un Grist simulé
 function controller(fetchTable = async (name) => TABLES[name]) {
     const app = loadApp({
-        grist: { ready() {}, onRecord() {}, onRecords() {}, getSelectedTableId: async () => 'Donnees', docApi: { fetchTable } },
+        grist: { ready() {}, onOptions() {}, onRecord() {}, onRecords() {}, getSelectedTableId: async () => 'Donnees', docApi: { fetchTable } },
         setTimeout() {}, initUi() {}, uiToast() {}, uiSetWarnings() {}, uiEnableActions() {}, uiSetTemplate() {},
         uiShowPreview() {}, uiPreviewEmptyText() {}, uiCloseModal() {}, uiOpenModal() {},
     });

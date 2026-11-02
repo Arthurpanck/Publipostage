@@ -26,10 +26,13 @@ initUi({
     onDownloadZip: downloadBulk,
 });
 
-// Lancement différé du chargement du template car plante parfois si pas de timeout
-setTimeout(() => {
-    loadSavedTemplate();
-}, 500);
+// Attendre le message initial de Grist plutôt qu'un délai arbitraire.
+// Les options peuvent aussi changer lorsqu'un autre utilisateur les enregistre.
+let templateLoadRun = 0;
+let templateUploadPending = false;
+grist.onOptions((options) => {
+    if (!templateUploadPending) loadSavedTemplate(options);
+});
 
 grist.onRecord(async (record, mappings) => {
     state.filenameColumn = mappings?.filename || '';
@@ -65,7 +68,10 @@ async function handleTemplateUpload(file) {
         return;
     }
 
-    uiToast("Upload et sauvegarde du template...", "normal");
+    if (templateUploadPending) return;
+    templateUploadPending = true;
+    ++templateLoadRun; // un chargement ancien ne doit pas remplacer le nouvel import
+    uiToast("Import et conservation du modèle...", "normal");
 
     try {
         const buffer = await readFileAsBuffer(file);
@@ -78,6 +84,10 @@ async function handleTemplateUpload(file) {
             throw new Error("ID de fichier invalide reçu.");
         }
 
+        await retainTemplateAttachment(attachmentId, file.name);
+
+        // setOptions est un brouillon local Grist, pas une sauvegarde partagée.
+        // L'utilisateur enregistre ce choix via le bouton natif de Grist.
         // Sauvegarde des informations du template uploadé
         await grist.setOptions({
             ...await grist.getOptions(),
@@ -85,20 +95,16 @@ async function handleTemplateUpload(file) {
             templateName: file.name,
         });
 
-        // Vérification si le fichier est bien sauvegardé
-        const checkId = await grist.getOption('templateId');
-        if (checkId != attachmentId) {
-            uiToast("Attention, cliquer sur 'Enregistrer' en haut de la page !", "error");
-            return;
-        }
-
         updateTemplateState(buffer, file.name, type);
         uiCloseModal();
-        uiToast("Modèle sauvegardé", "success");
+        uiSetTemplateNotice("Fichier conservé. Cliquez sur « Enregistrer » dans la configuration Grist pour mémoriser le choix du modèle pour tous les utilisateurs.");
+        uiToast("Modèle prêt — choix à enregistrer dans Grist", "normal");
 
     } catch (err) {
         console.error(err);
         uiToast("Erreur lors de la sauvegarde : " + err.message, "error");
+    } finally {
+        templateUploadPending = false;
     }
 }
 
@@ -227,25 +233,55 @@ function updateActionsState() {
 // Récupère le template sauvegardé au chargement de la page.
 // Modèle configuré -> on le charge sans modale ; sinon la modale
 // d'instructions s'affiche automatiquement (premier chargement).
-async function loadSavedTemplate() {
+async function loadSavedTemplate(options) {
+    const run = ++templateLoadRun;
     try {
-        const templateId = await grist.getOption('templateId');
-        const templateName = await grist.getOption('templateName');
-
-        if (templateId && templateName) {
-            uiToast("Récupération du modèle...", "normal");
-            const type = getTemplateType(templateName);
-            if (!type) throw new Error('Format du modèle sauvegardé non supporté.');
-
-            const buffer = await downloadAttachmentFromGrist(templateId);
-            updateTemplateState(buffer, templateName, type);
-            uiToast("Modèle chargé : " + templateName, "success");
-        } else {
+        options = options === undefined ? await grist.getOptions() : options;
+        const { templateId, templateName } = options || {};
+        if (run !== templateLoadRun) return;
+        if (!templateId || !templateName) {
+            state.templateBuffer = null;
+            state.templateName = null;
+            state.templateType = null;
+            ++previewRun;
+            uiSetTemplate('');
+            uiSetTemplateNotice('');
+            updateActionsState();
+            uiShowPreview(false);
             uiOpenModal();
+            return;
         }
-    } catch (e) {
-        console.warn("Erreur chargement", e);
-        uiOpenModal();
+        uiToast("Récupération du modèle...", "normal");
+        const type = getTemplateType(templateName);
+        if (!type) throw new Error('Format du modèle sauvegardé non supporté.');
+        const buffer = await downloadAttachmentFromGrist(templateId);
+        if (run !== templateLoadRun) return;
+        if (type === 'docx') compileDocxTemplate(buffer);
+        else await PDFLib.PDFDocument.load(buffer);
+        if (run !== templateLoadRun) return;
+        // Migrer les anciens modèles encore lisibles, sans bloquer leur lecture
+        // si cet utilisateur n'a pas le droit de créer/écrire la table de stockage.
+        let retentionWarning = '';
+        try {
+            await retainTemplateAttachment(templateId, templateName);
+        } catch (error) {
+            retentionWarning = "Modèle chargé, mais sa conservation durable n’a pas pu être vérifiée. Un éditeur doit le réimporter : " + error.message;
+        }
+        if (run !== templateLoadRun) return;
+        updateTemplateState(buffer, templateName, type);
+        if (retentionWarning) uiSetTemplateNotice(retentionWarning);
+        uiCloseModal();
+        uiToast("Modèle chargé : " + templateName, "success");
+    } catch (error) {
+        if (run !== templateLoadRun) return;
+        // Un refus d'accès ou une panne réseau n'est pas « aucun modèle ».
+        state.templateBuffer = null;
+        ++previewRun;
+        updateActionsState();
+        uiShowPreview(false);
+        uiPreviewEmptyText("Le modèle enregistré n’a pas pu être chargé. Rechargez le widget pour réessayer.");
+        uiSetTemplateNotice("Modèle enregistré inaccessible : " + error.message);
+        uiToast("Erreur de chargement du modèle : " + error.message, "error");
     }
 }
 
@@ -278,7 +314,7 @@ async function downloadAttachmentFromGrist(attachmentId) {
 
     const response = await fetch(url);
     if (!response.ok) {
-        throw new Error('Impossible de récupérer le template');
+        throw new Error(`Lecture de la pièce jointe refusée ou indisponible (HTTP ${response.status}).`);
     }
     return await response.arrayBuffer();
 }

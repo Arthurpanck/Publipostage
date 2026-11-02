@@ -9,14 +9,15 @@ function controller() {
     let options = { templateId: 42, templateName: 'ancien.docx', other: 'conserver' };
     const events = [];
     const app = loadApp({
-        grist: { ready() {}, onRecord() {}, onRecords() {}, getOptions: async () => options,
+        grist: { ready() {}, onOptions() {}, onRecord() {}, onRecords() {}, getOptions: async () => options,
             setOptions: async value => { events.push('save'); options = value; },
             getOption: async key => options[key], setOption: async (key, value) => { events.push('save'); options[key] = value; } },
-        setTimeout() {}, initUi() {}, uiToast: (message, type) => events.push({message, type}),
+        setTimeout() {}, uiSetTemplateNotice() {}, initUi() {}, uiToast: (message, type) => events.push({message, type}),
         uiCloseModal() {}, uiSetTemplate() {}, uiEnableActions() {}, uiShowPreview() {}, uiPreviewEmptyText() {}, uiSetWarnings() {},
         PDFLib: { PDFDocument: { load: async () => { throw new Error('PDF invalide'); } } },
     });
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8'), app);
+    app.retainTemplateAttachment = async () => { events.push('retain'); };
     app.readFileAsBuffer = async file => file.buffer;
     app.uploadAttachmentToGrist = async () => { events.push('upload'); return 99; };
     return { app, events, options: () => options };
@@ -38,7 +39,7 @@ test('un PDF invalide est refusé avant upload', async () => {
 test('extension DOCX en majuscules et sauvegarde atomique des options', async () => {
     const { app, events, options } = controller();
     await app.handleTemplateUpload({ name: 'MODELE.DOCX', buffer: template(app, para('{{Titre}}')) });
-    assert.deepEqual(events.filter(e => typeof e === 'string'), ['upload', 'save']);
+    assert.deepEqual(events.filter(e => typeof e === 'string'), ['upload', 'retain', 'save']);
     assert.equal(options().templateId, 99);
     assert.equal(options().templateName, 'MODELE.DOCX');
     assert.equal(options().other, 'conserver');

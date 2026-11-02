@@ -8,7 +8,7 @@ function controller() {
     const saved = [], files = [], messages = [];
     let onRecord, onRecords, ready, recordOptions, recordsOptions;
     const app = loadApp({
-        grist: { ready(value) { ready = value; },
+        grist: { onOptions() {}, ready(value) { ready = value; },
             onRecord(fn, options) { onRecord = fn; recordOptions = options; },
             onRecords(fn, options) { onRecords = fn; recordsOptions = options; } },
         initUi() {}, setTimeout() {}, uiEnableActions() {},

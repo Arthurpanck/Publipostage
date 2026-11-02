@@ -295,3 +295,9 @@ function uiFillWarnMenu() {
         list.appendChild(item);
     }
 }
+
+// Message persistant : ne pas confondre conservation du fichier et choix enregistré.
+function uiSetTemplateNotice(message) {
+    $('templateNotice').textContent = message;
+    $('templateNotice').hidden = !message;
+}
