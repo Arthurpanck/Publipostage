@@ -2,13 +2,13 @@
  * MODULE RENDUS
  * Version : 1.0
  * Mise en forme des valeurs selon le type de la colonne Grist (DOCX) :
- *   - Booléen : case à cocher ☑ / ☐, automatique.
- *   - Choix, Choix multiples, Référence, Référence multiple : tag teinté en
- *     gras, automatique. La couleur vient de l'option Grist (Choix) ou de la
- *     colonne affichée de la table liée quand c'est un Choix ; sinon gris.
+ *   - Booléen : case à cocher ☑ / ☐ suivie du nom de la colonne, automatique.
+ *   - Choix, Choix multiples : tag teinté en gras, couleur de l'option Grist.
+ *   - Référence, Référence multiple : tag gris, valeur affichée de la fiche.
  *   - {Etape|etapes} : progression dans l'ordre des options du Choix.
  *   - {Actuel|barre:Objectif} ou {Actuel|barre:Objectif:Pourcentage} : barre
- *     de fond. Toutes les valeurs viennent de colonnes de la ligne.
+ *     de fond. Toutes les valeurs viennent de colonnes de la ligne. Au-delà
+ *     de 100 %, la barre et le pourcentage passent en rouge.
  * Texte, nombres sans option et dates restent insérés tels quels.
  *
  * Principe : le parser docxtemplater renvoie un marqueur à la place de la
@@ -96,13 +96,11 @@ async function refDisplay(batch, meta, tableId, visibleIndex) {
     const { cols } = meta;
     const tbl = await fetchTableCached(batch.cache, tableId);
     const visibleCol = visibleIndex === undefined ? null : cols.colId[visibleIndex];
-    const visibleOpts = visibleIndex === undefined ? {} : parseWidgetOptions(cols.widgetOptions[visibleIndex]);
-    const isChoice = visibleIndex !== undefined && cols.type[visibleIndex] === 'Choice';
     const map = new Map();
     tbl.id.forEach((id, i) => {
         const raw = visibleCol ? tbl[visibleCol][i] : id;
         const text = Array.isArray(raw) ? raw.slice(raw[0] === 'L' ? 1 : 0).join(', ') : raw;
-        map.set(id, { text: text == null ? '' : String(text), style: isChoice ? choiceStyle(visibleOpts, raw) : null });
+        map.set(id, { text: text == null ? '' : String(text), style: null }); // références : étiquette grise
     });
     return map;
 }
@@ -213,7 +211,8 @@ function renderer(ctx, { value, spec, format, args, tag, lookup }) {
     switch (spec.type) {
         case 'Bool': {
             const checked = value === true || value === 1 || value === 'true';
-            return { inline: (rPr, env) => env.draw ? checkboxImage(rPr, env, checked) : checkboxRun(rPr, checked) };
+            // La case est suivie du libellé de la colonne Grist (texte modifiable)
+            return { inline: (rPr, env) => (env.draw ? checkboxImage(rPr, env, checked) : checkboxRun(rPr, checked)) + runXml(rPr, {}, NBSP + (spec.label || tag)) };
         }
         case 'Choice':
             if (value === null || value === '') return { inline: () => '' };
@@ -354,6 +353,9 @@ function percentFraction(pct) {
 }
 
 const BAR_FILL = 'DCEFEE', BAR_BORDER = 'C9D1D8';
+// Au-delà de l'objectif : barre pleine en rouge clair, pourcentage en rouge
+const OVER = { fill: 'FCE1DD', border: 'E5948A', text: '8A1C12', pct: 'B42318' };
+const isOver = fraction => fraction > 1 + 1e-9;
 
 // [pourcentage] [valeur sur la barre de fond] sur [objectif]
 function barRuns(rPr, actual, goal, pct, info) {
@@ -369,17 +371,18 @@ function barRuns(rPr, actual, goal, pct, info) {
     const chars = Array.from(' ' + text + ' '.repeat(width));
     chars.length = width;
     const filled = Math.round(Math.min(Math.max(fraction, 0), 1) * width);
+    const over = isOver(fraction);
     const bar = {
         'w:rFonts': fonts(MONO_FONT), 'w:b': '<w:b w:val="0"/>', 'w:bCs': '<w:bCs w:val="0"/>',
-        'w:i': null, 'w:iCs': null, 'w:color': '<w:color w:val="1F1F1F"/>', 'w:highlight': null, 'w:u': null,
-        'w:bdr': `<w:bdr w:val="single" w:sz="4" w:space="0" w:color="${BAR_BORDER}"/>`,
+        'w:i': null, 'w:iCs': null, 'w:color': `<w:color w:val="${over ? OVER.text : '1F1F1F'}"/>`, 'w:highlight': null, 'w:u': null,
+        'w:bdr': `<w:bdr w:val="single" w:sz="4" w:space="0" w:color="${over ? OVER.border : BAR_BORDER}"/>`,
     };
     let xml = '';
     if (pct) {
         const shown = formatNumber(fraction, { opts: { numMode: 'percent', maxDecimals: (pct.spec && pct.spec.opts && pct.spec.opts.maxDecimals) || 0 } }, info);
-        xml += runXml(rPr, { 'w:color': '<w:color w:val="0A4A50"/>' }, shown + NBSP + NBSP);
+        xml += runXml(rPr, { 'w:color': `<w:color w:val="${over ? OVER.pct : '0A4A50'}"/>`, ...(over ? { 'w:b': '<w:b/>', 'w:bCs': '<w:bCs/>' } : {}) }, shown + NBSP + NBSP);
     }
-    if (filled > 0) xml += runXml(rPr, { ...bar, 'w:shd': `<w:shd w:val="clear" w:color="auto" w:fill="${BAR_FILL}"/>` }, chars.slice(0, filled).join(''));
+    if (filled > 0) xml += runXml(rPr, { ...bar, 'w:shd': `<w:shd w:val="clear" w:color="auto" w:fill="${over ? OVER.fill : BAR_FILL}"/>` }, chars.slice(0, filled).join(''));
     if (filled < width) xml += runXml(rPr, { ...bar, 'w:shd': '<w:shd w:val="clear" w:color="auto" w:fill="FFFFFF"/>' }, chars.slice(filled).join(''));
     xml += runXml(rPr, { 'w:color': '<w:color w:val="6B7580"/>' }, NBSP + NBSP + 'sur' + NBSP + formatNumber(goal.value, goal.spec, info));
     return xml;
@@ -509,15 +512,19 @@ function drawBar(draw, text, fraction, pctText, goalText, px) {
     const goal = 'sur ' + goalText;
     const w = (pctText ? pctW + gap : 0) + barW + gap + draw.measure(font, goal);
     const x0 = pctText ? pctW + gap : 0;
-    const f = Math.min(Math.max(fraction, 0), 1);
+    const f = Math.min(Math.max(fraction, 0), 1), over = isOver(fraction);
     return draw.paint(w, h, g => {
-        g.font = font; g.textBaseline = 'middle';
-        if (pctText) { g.fillStyle = '#0A4A50'; g.textAlign = 'right'; g.fillText(pctText, pctW, h / 2); g.textAlign = 'left'; }
+        g.textBaseline = 'middle';
+        if (pctText) {
+            g.font = over ? `600 ${fs}px ${MONO}` : font;
+            g.fillStyle = over ? css(OVER.pct) : '#0A4A50'; g.textAlign = 'right'; g.fillText(pctText, pctW, h / 2); g.textAlign = 'left';
+        }
+        g.font = font;
         roundRect(g, x0 + 0.5, 0.5, barW - 1, h - 1, 4 * k);
         g.save(); g.clip(); g.fillStyle = '#FFFFFF'; g.fillRect(x0, 0, barW, h);
-        g.fillStyle = css(BAR_FILL); g.fillRect(x0, 0, barW * f, h); g.restore();
-        g.lineWidth = 1; g.strokeStyle = '#D3DAE0'; g.stroke();
-        g.fillStyle = '#1F1F1F'; g.fillText(text, x0 + padX, h / 2);
+        g.fillStyle = css(over ? OVER.fill : BAR_FILL); g.fillRect(x0, 0, barW * f, h); g.restore();
+        g.lineWidth = 1; g.strokeStyle = over ? css(OVER.border) : '#D3DAE0'; g.stroke();
+        g.fillStyle = over ? css(OVER.text) : '#1F1F1F'; g.fillText(text, x0 + padX, h / 2);
         g.fillStyle = '#6B7580'; g.fillText(goal, x0 + barW + gap, h / 2);
     });
 }

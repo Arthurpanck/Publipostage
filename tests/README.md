@@ -156,11 +156,11 @@ fois par lot, et met en forme les balises simples :
 
 | Type Grist | Balise | Rendu Word |
 |---|---|---|
-| Booléen | `{Mutuelle}` | ☑ ou ☐ (police Segoe UI Symbol) |
+| Booléen | `{Mutuelle}` | ☑ ou ☐ suivi du nom de la colonne Grist |
 | Choix, Choix multiples | `{Statut}` | une étiquette teintée en gras par valeur, couleur de l'option Grist |
-| Référence, Référence multiple | `{Equipe}` | étiquette avec la colonne affichée de la fiche liée ; couleur si cette colonne est un Choix, sinon gris |
+| Référence, Référence multiple | `{Equipe}` | étiquette grise avec la colonne affichée de la fiche liée |
 | Choix (progression) | `{Etape\|etapes}` | cercles reliés dans l'ordre des choix ; seule dans son paragraphe, un tableau, sinon une version en ligne |
-| Numérique, Entier | `{Actuel\|barre:Objectif}` ou `{Actuel\|barre:Objectif:Pourcentage}` | valeur sur une barre de fond, pourcentage à gauche (3 valeurs), objectif à droite |
+| Numérique, Entier | `{Actuel\|barre:Objectif}` ou `{Actuel\|barre:Objectif:Pourcentage}` | valeur sur une barre de fond, pourcentage à gauche (3 valeurs), objectif à droite ; en rouge au-delà de 100 % |
 
 Les boucles et conditions (`{#Mutuelle}`) gardent la valeur brute, les textes,
 dates et nombres sans option ne changent pas. Une mise en forme inconnue ou

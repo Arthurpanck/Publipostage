@@ -30,9 +30,9 @@ function runs(xml) {
         .map(m => ({ rPr: m[1] || '', text: m[2] }));
 }
 
-test('booléen : case cochée ou vide, sans toucher aux conditions', async () => {
-    const { xml } = await generate(para('{Mutuelle} M {Teletravail} T {#Mutuelle}oui{/Mutuelle}{^Teletravail}non{/Teletravail}'));
-    assert.equal(xmlText(xml), '☑︎ M ☐︎ T ouinon');
+test('booléen : case cochée ou vide suivie du nom de la colonne, sans toucher aux conditions', async () => {
+    const { xml } = await generate(para('{Mutuelle}   {Teletravail} {#Mutuelle}oui{/Mutuelle}{^Teletravail}non{/Teletravail}'));
+    assert.equal(xmlText(xml), '☑︎ Mutuelle   ☐︎ Télétravail ouinon');
     assert.match(xml, /w:ascii="Segoe UI Symbol"/);
 });
 
@@ -57,12 +57,11 @@ test('choix multiples et références multiples : un tag par valeur', async () =
     assert.deepEqual(fills.slice(3), ['EEF1F4', 'EEF1F4']); // Personnes.Nom est un texte : gris
 });
 
-test('référence : valeur affichée de la fiche liée, couleur si cette colonne est un choix', async () => {
+test('référence : valeur affichée de la fiche liée, toujours en gris', async () => {
     const { xml } = await generate(para('{Equipe}/{Pole_equipe}'));
     assert.equal(xmlText(xml), ' Talents / RH ');
-    const [equipe, pole] = runs(xml).filter(r => /w:shd/.test(r.rPr));
-    assert.match(equipe.rPr, /w:fill="EEF1F4"/);
-    assert.doesNotMatch(pole.rPr, /w:fill="EEF1F4"/);
+    const fills = runs(xml).filter(r => /w:shd/.test(r.rPr)).map(r => /w:fill="(\w+)"/.exec(r.rPr)[1]);
+    assert.deepEqual(fills, ['EEF1F4', 'EEF1F4']); // même si la colonne affichée est un choix coloré
 });
 
 test('valeurs vides : aucun tag', async () => {
@@ -102,7 +101,10 @@ test('barre : valeur sur la barre et objectif, valeurs formatées comme dans Gri
 test('barre à trois valeurs : pourcentage de la colonne à gauche', async () => {
     const { xml } = await generate(para('{Salaire|barre:Objectif:Taux}'), RECORDS[1]);
     assert.match(xmlText(xml), /^105 %   2 100,00 € +  sur 2 000,00 €$/);
-    assert.equal(runs(xml).filter(r => /w:bdr/.test(r.rPr)).length, 1); // dépasse l'objectif : barre pleine
+    const bar = runs(xml).filter(r => /w:bdr/.test(r.rPr));
+    assert.equal(bar.length, 1); // dépasse l'objectif : barre pleine, en rouge
+    assert.match(bar[0].rPr, /w:fill="FCE1DD"/);
+    assert.match(runs(xml)[0].rPr, /<w:b\/>[\s\S]*w:val="B42318"/);
 });
 
 test('barre sur des entiers, balise écrite librement', async () => {
@@ -140,8 +142,8 @@ test('le texte voisin de la balise garde sa mise en forme', async () => {
     const body = '<w:p><w:r><w:rPr><w:i/></w:rPr><w:t xml:space="preserve">a {Mutuelle} b</w:t></w:r>' + run(' c') + '</w:p>';
     const { xml } = await generate(body);
     const r = runs(xml);
-    assert.deepEqual(r.map(x => x.text), ['a ', '☑︎', ' b', ' c']);
-    assert.ok(r.slice(0, 3).every(x => /<w:i\/>/.test(x.rPr)));
+    assert.deepEqual(r.map(x => x.text), ['a ', '☑︎', ' Mutuelle', ' b', ' c']);
+    assert.ok(r.slice(0, 4).every(x => /<w:i\/>/.test(x.rPr)));
 });
 
 // Canvas simulé : la voie « images » (navigateur) produit des PNG insérés en ligne
