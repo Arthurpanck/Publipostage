@@ -9,6 +9,8 @@
  *   - {Actuel|barre:Objectif} ou {Actuel|barre:Objectif:Pourcentage} : barre
  *     de fond. Toutes les valeurs viennent de colonnes de la ligne. Au-delà
  *     de 100 %, la barre et le pourcentage passent en rouge.
+ *   - Pièce jointe : images insérées, {Photo|petit} (2 cm de haut au plus),
+ *     {Photo|moyen} (4 cm), {Photo} ou {Photo|grand} (9 cm).
  * Texte, nombres sans option et dates restent insérés tels quels.
  *
  * Principe : le parser docxtemplater renvoie un marqueur à la place de la
@@ -22,7 +24,9 @@
 const RENDER = Symbol('render');
 const MARK_OPEN = '', MARK_CLOSE = '';
 const MARK_RE = /(\d+)/g;
-const FORMATS = ['barre', 'etapes'];
+// Hauteur maximale des images d'une pièce jointe : 2, 4 et 9 cm (9 cm par défaut)
+const IMAGE_SIZES = { petit: 76, moyen: 151, grand: 340 };
+const FORMATS = ['barre', 'etapes', ...Object.keys(IMAGE_SIZES)];
 
 // ---------------------------------------------------------------------------
 // Métadonnées Grist
@@ -150,6 +154,9 @@ function makeParser(ctx) {
             if (format === 'etapes' && args.length) {
                 throw new Error(`Étapes : aucune option, l'ordre est celui des choix de la colonne : {${base}|etapes}.`);
             }
+            if (format in IMAGE_SIZES && args.length) {
+                throw new Error(`Taille d'image : petit, moyen ou grand, sans autre option : {${base}|${format}}.`);
+            }
         }
         return {
             get(scope, context) {
@@ -208,6 +215,10 @@ function renderer(ctx, { value, spec, format, args, tag, lookup }) {
             block: (env, pPr) => stepsImage(env, pPr, choices, current, color),
         };
     }
+    if (format in IMAGE_SIZES && (!spec || spec.type !== 'Attachments')) {
+        ctx.unknownTags.add(`${tag} (taille réservée aux colonnes Pièce jointe)`);
+        return null;
+    }
     if (!spec) return null;
     const tags = items => ({ raw: items.map(i => i.text).join(', '), inline: (rPr, env) => tagImages(rPr, env, items) });
     switch (spec.type) {
@@ -226,7 +237,8 @@ function renderer(ctx, { value, spec, format, args, tag, lookup }) {
         case 'Attachments': {
             const ids = refIds(value);
             const files = ids.map(id => (info.files && info.files.get(id)) || null).filter(Boolean);
-            return { raw: files.map(f => f.name).join(', '), inline: (rPr, env) => attachmentRuns(rPr, env, files) };
+            const maxHeight = IMAGE_SIZES[format] || IMAGE_SIZES.grand;
+            return { raw: files.map(f => f.name).join(', '), inline: (rPr, env) => attachmentRuns(rPr, env, files, maxHeight) };
         }
         case 'Ref':
         case 'RefList': {
@@ -551,12 +563,12 @@ function stepsInline(rPr, env, choices, current, fill) {
 }
 
 // Pièces jointes : images à leur taille, réduites à la largeur disponible (page
-// ou cellule de tableau) et à 9 cm de haut ; autres fichiers : étiquette du nom.
-const MAX_IMAGE_HEIGHT = 340;
-function attachmentRuns(rPr, env, files) {
+// ou cellule de tableau) et à la hauteur choisie (petit 2 cm, moyen 4 cm,
+// grand 9 cm par défaut) ; autres fichiers : étiquette du nom.
+function attachmentRuns(rPr, env, files, maxHeight = IMAGE_SIZES.grand) {
     return files.map(file => {
         if (!file.image) return tagImages(rPr, env, [{ text: file.name, style: null }]);
-        const scale = Math.min(1, env.width() / file.w, MAX_IMAGE_HEIGHT / file.h);
+        const scale = Math.min(1, env.width() / file.w, maxHeight / file.h);
         const img = { w: Math.round(file.w * scale), h: Math.round(file.h * scale) };
         const rel = env.media.add({ key: 'pj:' + file.id, bytes: file.bytes, ext: file.ext });
         return `<w:r>${mergeRPr(rPr, { 'w:shd': null, 'w:highlight': null, 'w:u': null, 'w:bdr': null })}${drawingXml(rel, img, file.name)}</w:r>`;

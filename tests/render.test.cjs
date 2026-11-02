@@ -233,3 +233,18 @@ test('référence reçue développée par Grist ({ id, … }) : fiche liée et �
     const { xml } = await generate(para('{Equipe} · {Equipes.Pole}'), record);
     assert.deepEqual(alts(xml), ['Talents', 'RH']);
 });
+
+test('pièces jointes : tailles petit, moyen, grand', async () => {
+    const { xml } = await generate(para('{Photo|petit}') + para('{Photo|moyen}') + para('{Photo|grand}'));
+    const heights = [...xml.matchAll(/<wp:extent cx="\d+" cy="(\d+)"\/>/g)].map(m => Math.round(+m[1] / 9525))
+        .filter((_, i) => i % 2 === 0); // la pilule du PDF suit chaque image
+    assert.deepEqual(heights, [76, 151, 340]);
+});
+
+test('taille d’image sur une colonne qui n’est pas une pièce jointe : signalée, valeur brute', async () => {
+    const { xml, unknown } = await generate(para('{Statut|petit}'));
+    assert.equal(xmlText(xml), 'CDI');
+    assert.deepEqual(unknown, ['statut|petit (taille réservée aux colonnes Pièce jointe)']);
+    const app = loadApp();
+    assert.throws(() => app.compileDocxTemplate(template(app, para('{Photo|petit:3}'))), /Erreur Template Word/);
+});

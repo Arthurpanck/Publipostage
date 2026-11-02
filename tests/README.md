@@ -161,7 +161,7 @@ fois par lot, et met en forme les balises simples :
 | Référence, Référence multiple | `{Equipe}` | pilule grise, valeur affichée de la fiche liée |
 | Choix (progression) | `{Etape\|etapes}` | cercles reliés dans l'ordre des choix de la colonne ; pleine largeur si la balise est seule dans son paragraphe, compacte dans une phrase |
 | Numérique, Entier | `{Actuel\|barre:Objectif}` ou `{Actuel\|barre:Objectif:Pourcentage}` | valeur sur une barre de fond, pourcentage à gauche (3 valeurs), objectif à droite ; en rouge au-delà de 100 % |
-| Pièce jointe | `{Photo}` | images à leur taille, réduites à la largeur de la page ou de la cellule et à 9 cm de haut ; nom des autres fichiers |
+| Pièce jointe | `{Photo}`, `{Signature\|petit}`, `{Logo\|moyen}` | images à leur taille, réduites à la largeur de la page ou de la cellule et à 9 cm de haut (`grand`, par défaut), 4 cm (`moyen`) ou 2 cm (`petit`) ; nom des autres fichiers |
 
 Ces rendus sont dessinés au canvas du navigateur et insérés en images PNG
 (4x, une seule copie par image identique), centrées sur la ligne
