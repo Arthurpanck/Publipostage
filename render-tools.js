@@ -12,13 +12,11 @@
  * Texte, nombres sans option et dates restent insérés tels quels.
  *
  * Principe : le parser docxtemplater renvoie un marqueur à la place de la
- * valeur ; après le rendu, chaque marqueur est remplacé :
- *   - dans le navigateur, par une image PNG dessinée au canvas (4x), fidèle à
- *     la maquette : pilules, case, barre arrondie, cercles reliés. Les
- *     tailles suivent la police de la balise, l'image est centrée sur la
- *     ligne (w:position) et porte le texte en description (accessibilité) ;
- *   - sans canvas (tests Node), par des runs Word équivalents en texte, qui
- *     héritent de la mise en forme de la balise, ou un tableau pour les étapes.
+ * valeur ; après le rendu, chaque marqueur est remplacé par une image PNG
+ * dessinée au canvas du navigateur (4x), fidèle à la maquette : pilules,
+ * case, barre arrondie, cercles reliés. Les tailles suivent la police de la
+ * balise, l'image est centrée sur la ligne (w:position) et porte le texte en
+ * description (accessibilité). Sans canvas, la valeur est insérée en texte.
  */
 
 const RENDER = Symbol('render');
@@ -179,9 +177,9 @@ function lookupScopes(context, name) {
     return undefined;
 }
 
-// Renvoie { inline(rPr, env) -> runs XML, block?(env) -> XML } ou null (valeur
-// brute). env.draw (canvas du navigateur) : rendus dessinés en images nettes,
-// fidèles à la maquette ; sans canvas : repli en texte Word.
+// Renvoie { inline(rPr, env) -> runs XML, block?(env, pPr) -> XML, raw } ou null
+// (valeur brute). Les rendus sont dessinés au canvas du navigateur (env.draw) ;
+// sans canvas, la valeur est insérée en texte (raw).
 function renderer(ctx, { value, spec, format, args, tag, lookup }) {
     const info = ctx.info || {};
     if (format === 'barre') {
@@ -191,7 +189,7 @@ function renderer(ctx, { value, spec, format, args, tag, lookup }) {
         if (args[1] && !pct) ctx.unknownTags.add(args[1]);
         if (!goal || (args[1] && !pct)) return null;
         const actual = { value, spec };
-        return { inline: (rPr, env) => env.draw ? barImage(rPr, env, actual, goal, pct, info) : barRuns(rPr, actual, goal, pct, info) };
+        return { raw: String(value), inline: (rPr, env) => barImage(rPr, env, actual, goal, pct, info) };
     }
     if (format === 'etapes') {
         const choices = spec && spec.opts && spec.opts.choices;
@@ -202,23 +200,32 @@ function renderer(ctx, { value, spec, format, args, tag, lookup }) {
         const color = (choiceStyle(spec.opts, value) || {}).fill;
         const current = choices.indexOf(value);
         return {
-            inline: rPr => stepsRuns(rPr, choices, current, color),
-            block: (env, pPr) => env.draw ? stepsImage(env, pPr, choices, current, color) : stepsTable(choices, current, color),
+            raw: value == null ? '' : String(value),
+            // Seule dans son paragraphe : frise sur toute la largeur ; dans une phrase : frise compacte
+            inline: (rPr, env) => stepsInline(rPr, env, choices, current, color),
+            block: (env, pPr) => stepsImage(env, pPr, choices, current, color),
         };
     }
     if (!spec) return null;
-    const tags = items => ({ inline: (rPr, env) => env.draw ? tagImages(rPr, env, items) : tagRuns(rPr, items) });
+    const tags = items => ({ raw: items.map(i => i.text).join(', '), inline: (rPr, env) => tagImages(rPr, env, items) });
     switch (spec.type) {
         case 'Bool': {
             const checked = value === true || value === 1 || value === 'true';
             // La case est suivie du libellé de la colonne Grist (texte modifiable)
-            return { inline: (rPr, env) => (env.draw ? checkboxImage(rPr, env, checked) : checkboxRun(rPr, checked)) + runXml(rPr, {}, NBSP + (spec.label || tag)) };
+            return {
+                raw: String(value),
+                inline: (rPr, env) => checkboxImage(rPr, env, checked) + runXml(rPr, {}, NBSP + (spec.label || tag)),
+            };
         }
         case 'Choice':
-            if (value === null || value === '') return { inline: () => '' };
-            return tags([{ text: String(value), style: choiceStyle(spec.opts, value) }]);
+            return tags(value === null || value === '' ? [] : [{ text: String(value), style: choiceStyle(spec.opts, value) }]);
         case 'ChoiceList':
             return tags(listValue(value).map(v => ({ text: String(v), style: choiceStyle(spec.opts, v) })));
+        case 'Attachments': {
+            const ids = refIds(value);
+            const files = ids.map(id => (info.files && info.files.get(id)) || null).filter(Boolean);
+            return { raw: files.map(f => f.name).join(', '), inline: (rPr, env) => attachmentRuns(rPr, env, files) };
+        }
         case 'Ref':
         case 'RefList':
             return tags(refIds(value).map(id => (spec.refs && spec.refs.get(id)) || { text: String(id), style: null })
@@ -255,16 +262,17 @@ function luminance(rgb) {
     const [r, g, b] = rgb.map(x => { x /= 255; return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4); });
     return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
-// Fond très clair et texte foncé dans la teinte de la couleur Grist
-function tintColors(fill) {
-    const rgb = hexToRgb(fill);
-    if (!rgb) return { bg: 'EEF1F4', fg: '2B2F36' };
-    let k = 0.84, bg = mix(rgb, [255, 255, 255], k);
-    while (luminance(bg) < 0.78 && k < 0.95) { k += 0.02; bg = mix(rgb, [255, 255, 255], k); }
-    let s = 0.4, fg = mix(rgb, [0, 0, 0], s);
-    while (luminance(fg) > 0.09 && s < 0.85) { s += 0.05; fg = mix(rgb, [0, 0, 0], s); }
-    return { bg: toHex(bg), fg: toHex(fg) };
+// Même teinte, foncée et saturée (texte lisible sur un fond clair)
+function darkSameHue(rgb) {
+    const [r, g, b] = rgb.map(x => x / 255), max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+    let h = 0;
+    if (d) h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    h = (h * 60 + 360) % 360;
+    const s = d ? 0.6 : 0, l = 0.27, c = (1 - Math.abs(2 * l - 1)) * s, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = l - c / 2;
+    const [r1, g1, b1] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+    return [r1 + m, g1 + m, b1 + m].map(v => v * 255);
 }
+
 // Couleur d'accent lisible sur fond blanc
 function accentColor(fill) {
     const rgb = hexToRgb(fill);
@@ -306,27 +314,7 @@ function mergeRPr(inherited, overrides) {
 const runXml = (rPr, overrides, text) =>
     `<w:r>${mergeRPr(rPr, overrides)}<w:t xml:space="preserve">${xmlEscape(text)}</w:t></w:r>`;
 
-const fonts = name => `<w:rFonts w:ascii="${name}" w:hAnsi="${name}" w:cs="${name}" w:eastAsia="${name}"/>`;
-const SYMBOL_FONT = 'Segoe UI Symbol';
-const MONO_FONT = 'Consolas';
 const NBSP = ' ';
-
-function checkboxRun(rPr, checked) {
-    // U+FE0E : présentation texte, pas d'emoji coloré
-    return runXml(rPr, { 'w:rFonts': fonts(SYMBOL_FONT) }, (checked ? '☑' : '☐') + '\uFE0E');
-}
-
-// Tags teintés en gras, séparés par une espace normale (retour à la ligne possible)
-function tagRuns(rPr, items) {
-    return items.map(({ text, style }) => {
-        const { bg, fg } = tintColors(style && style.fill);
-        return runXml(rPr, {
-            'w:b': '<w:b/>', 'w:bCs': '<w:bCs/>', 'w:color': `<w:color w:val="${fg}"/>`,
-            'w:highlight': null, 'w:u': null, 'w:strike': null, 'w:bdr': null,
-            'w:shd': `<w:shd w:val="clear" w:color="auto" w:fill="${bg}"/>`,
-        }, NBSP + text + NBSP);
-    }).join(runXml(rPr, {}, ' '));
-}
 
 // Formatage d'un nombre comme dans Grist (mode, devise, décimales)
 function formatNumber(value, spec, info) {
@@ -352,86 +340,10 @@ function percentFraction(pct) {
     return pct.spec && pct.spec.opts && pct.spec.opts.numMode === 'percent' ? pct.value : pct.value / 100;
 }
 
-const BAR_FILL = 'DCEFEE', BAR_BORDER = 'C9D1D8';
+const BAR_FILL = 'DCEFEE';
 // Au-delà de l'objectif : barre pleine en rouge clair, pourcentage en rouge
 const OVER = { fill: 'FCE1DD', border: 'E5948A', text: '8A1C12', pct: 'B42318' };
 const isOver = fraction => fraction > 1 + 1e-9;
-
-// [pourcentage] [valeur sur la barre de fond] sur [objectif]
-function barRuns(rPr, actual, goal, pct, info) {
-    const a = typeof actual.value === 'number' ? actual.value : Number(actual.value);
-    const b = typeof goal.value === 'number' ? goal.value : Number(goal.value);
-    let fraction = percentFraction(pct);
-    if (fraction === null) fraction = b ? a / b : 0;
-    if (!isFinite(fraction)) fraction = 0;
-
-    const text = formatNumber(actual.value, actual.spec, info);
-    const width = Math.max(20, Array.from(text).length + 4);
-    // Espaces normales pour le remplissage : la bordure reste continue
-    const chars = Array.from(' ' + text + ' '.repeat(width));
-    chars.length = width;
-    const filled = Math.round(Math.min(Math.max(fraction, 0), 1) * width);
-    const over = isOver(fraction);
-    const bar = {
-        'w:rFonts': fonts(MONO_FONT), 'w:b': '<w:b w:val="0"/>', 'w:bCs': '<w:bCs w:val="0"/>',
-        'w:i': null, 'w:iCs': null, 'w:color': `<w:color w:val="${over ? OVER.text : '1F1F1F'}"/>`, 'w:highlight': null, 'w:u': null,
-        'w:bdr': `<w:bdr w:val="single" w:sz="4" w:space="0" w:color="${over ? OVER.border : BAR_BORDER}"/>`,
-    };
-    let xml = '';
-    if (pct) {
-        const shown = formatNumber(fraction, { opts: { numMode: 'percent', maxDecimals: (pct.spec && pct.spec.opts && pct.spec.opts.maxDecimals) || 0 } }, info);
-        xml += runXml(rPr, { 'w:color': `<w:color w:val="${over ? OVER.pct : '0A4A50'}"/>`, ...(over ? { 'w:b': '<w:b/>', 'w:bCs': '<w:bCs/>' } : {}) }, shown + NBSP + NBSP);
-    }
-    if (filled > 0) xml += runXml(rPr, { ...bar, 'w:shd': `<w:shd w:val="clear" w:color="auto" w:fill="${over ? OVER.fill : BAR_FILL}"/>` }, chars.slice(0, filled).join(''));
-    if (filled < width) xml += runXml(rPr, { ...bar, 'w:shd': '<w:shd w:val="clear" w:color="auto" w:fill="FFFFFF"/>' }, chars.slice(filled).join(''));
-    xml += runXml(rPr, { 'w:color': '<w:color w:val="6B7580"/>' }, NBSP + NBSP + 'sur' + NBSP + formatNumber(goal.value, goal.spec, info));
-    return xml;
-}
-
-// Étapes en ligne : ● Offre › ● Signature › ◉ Accueil › ○ Formation
-function stepsRuns(rPr, choices, current, fill) {
-    const accent = accentColor(fill);
-    return choices.map((label, i) => {
-        const state = current < 0 ? 'next' : i < current ? 'done' : i === current ? 'cur' : 'next';
-        const color = state === 'next' ? '9AA3AB' : accent;
-        return runXml(rPr, { 'w:rFonts': fonts(SYMBOL_FONT), 'w:color': `<w:color w:val="${color}"/>` },
-            state === 'done' ? '●' : state === 'cur' ? '◉' : '○')
-            + runXml(rPr, state === 'cur' ? { 'w:b': '<w:b/>', 'w:bCs': '<w:bCs/>' } : { 'w:color': `<w:color w:val="${state === 'next' ? '8A939C' : '3C4650'}"/>` }, NBSP + label);
-    }).join(runXml(rPr, { 'w:color': '<w:color w:val="9AA3AB"/>' }, '  ›  '));
-}
-
-// Étapes en tableau : cercles reliés par un trait, libellés dessous
-function stepsTable(choices, current, fill) {
-    const accent = accentColor(fill), grey = 'C9D1D8';
-    const n = choices.length, TOTAL = 9600, SYM = 420;
-    const half = Math.max(120, Math.floor((TOTAL - n * SYM) / (2 * n)));
-    const noBorders = '<w:tblBorders><w:top w:val="nil"/><w:left w:val="nil"/><w:bottom w:val="nil"/><w:right w:val="nil"/><w:insideH w:val="nil"/><w:insideV w:val="nil"/></w:tblBorders>';
-    const tblPr = `<w:tblPr><w:tblW w:w="5000" w:type="pct"/><w:jc w:val="center"/>${noBorders}<w:tblLayout w:type="fixed"/><w:tblCellMar><w:top w:w="0" w:type="dxa"/><w:left w:w="0" w:type="dxa"/><w:bottom w:w="0" w:type="dxa"/><w:right w:w="0" w:type="dxa"/></w:tblCellMar><w:tblLook w:val="0000"/></w:tblPr>`;
-    const grid = '<w:tblGrid>' + choices.map(() => `<w:gridCol w:w="${half}"/><w:gridCol w:w="${SYM}"/><w:gridCol w:w="${half}"/>`).join('') + '</w:tblGrid>';
-    const tight = '<w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/>';
-    const cell = (w, content, extra = '') => `<w:tc><w:tcPr><w:tcW w:w="${w}" w:type="dxa"/>${extra}<w:vAlign w:val="center"/></w:tcPr>${content}</w:tc>`;
-    const below = '<w:tcMar><w:bottom w:w="160" w:type="dxa"/></w:tcMar>';
-    // Demi-trait : paragraphe vide de 2 pt dont la bordure basse passe au milieu du cercle
-    const line = color => color
-        ? `<w:p><w:pPr><w:pBdr><w:bottom w:val="single" w:sz="12" w:space="0" w:color="${color}"/></w:pBdr><w:spacing w:before="0" w:after="0" w:line="40" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/></w:rPr></w:pPr></w:p>`
-        : `<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="40" w:lineRule="exact"/><w:rPr><w:sz w:val="2"/></w:rPr></w:pPr></w:p>`;
-    const state = i => (current < 0 ? 'next' : i < current ? 'done' : i === current ? 'cur' : 'next');
-    const symbols = choices.map((_, i) => {
-        const s = state(i);
-        const left = i === 0 ? null : (current >= 0 && i <= current ? accent : grey);
-        const right = i === n - 1 ? null : (current >= 0 && i + 1 <= current ? accent : grey);
-        const glyph = s === 'done' ? '●' : s === 'cur' ? '◉' : '○';
-        const size = s === 'cur' ? 30 : 24;
-        const sym = `<w:p><w:pPr>${tight}<w:jc w:val="center"/></w:pPr><w:r><w:rPr>${fonts(SYMBOL_FONT)}<w:color w:val="${s === 'next' ? 'AEB6BE' : accent}"/><w:sz w:val="${size}"/><w:szCs w:val="${size}"/></w:rPr><w:t>${glyph}</w:t></w:r></w:p>`;
-        return cell(half, line(left)) + cell(SYM, sym) + cell(half, line(right));
-    }).join('');
-    const labels = choices.map((label, i) => {
-        const s = state(i);
-        const rPr = `<w:rPr>${s === 'cur' ? '<w:b/><w:bCs/>' : ''}<w:color w:val="${s === 'cur' ? '1F1F1F' : s === 'done' ? '3C4650' : '8A939C'}"/><w:sz w:val="17"/><w:szCs w:val="17"/></w:rPr>`;
-        return cell(2 * half + SYM, `<w:p><w:pPr>${tight}<w:jc w:val="center"/></w:pPr><w:r>${rPr}<w:t xml:space="preserve">${xmlEscape(label)}</w:t></w:r></w:p>`, '<w:gridSpan w:val="3"/>' + below);
-    }).join('');
-    return `<w:tbl>${tblPr}${grid}<w:tr>${symbols}</w:tr><w:tr>${labels}</w:tr></w:tbl>`;
-}
 
 // ---------------------------------------------------------------------------
 // Rendus dessinés (canvas) : mêmes proportions que la maquette, à 4x pour
@@ -562,16 +474,19 @@ function drawSteps(draw, choices, current, fill, width) {
     });
 }
 
-// Couleurs des étiquettes de la maquette : fond à 84 % de blanc, texte à 40 % de noir
+// Couleurs des étiquettes de la maquette : fond à 84 % de blanc, texte à 40 %
+// de noir. Une couleur Grist déjà claire sert de fond telle quelle, avec un
+// texte foncé de la même teinte.
 function tagColors(fill) {
     const rgb = hexToRgb(fill);
     if (!rgb) return { bg: 'ECEEF1', fg: '2B2F36' };
+    if (luminance(rgb) > 0.55) return { bg: toHex(rgb), fg: toHex(darkSameHue(rgb)) };
     return { bg: toHex(mix(rgb, [255, 255, 255], 0.84)), fg: toHex(mix(rgb, [0, 0, 0], 0.4)) };
 }
 
 // Image en ligne, centrée sur le texte (abaissée avec w:position)
 function imageRun(rPr, env, img, alt) {
-    const rel = env.media.add(img.data);
+    const rel = env.media.add({ key: img.data, data: img.data, ext: 'png' });
     const fontPt = fontPx(rPr) * 0.75, hPt = img.h * 0.75;
     const lower = Math.max(0, Math.round((hPt / 2 - 0.33 * fontPt) * 2));
     const props = mergeRPr(rPr, {
@@ -616,36 +531,114 @@ function barImage(rPr, env, actual, goal, pct, info) {
     return imageRun(rPr, env, img, `${pctText ? pctText + ' ' : ''}${text} sur ${goalText}`);
 }
 
+// Dans une phrase : chaque étape prend la place de son libellé
+function stepsInline(rPr, env, choices, current, fill) {
+    const font = `700 11.33px ${SANS}`;
+    const step = Math.max(64, ...choices.map(c => env.draw.measure(font, String(c)) + 14));
+    const img = drawSteps(env.draw, choices, current, fill, Math.min(step * choices.length, env.width()));
+    return imageRun(rPr, env, img, choices.map((c, i) => (i === current ? `[${c}]` : c)).join(' > '));
+}
+
+// Pièces jointes : images à leur taille, réduites à la largeur disponible (page
+// ou cellule de tableau) et à 9 cm de haut ; autres fichiers : étiquette du nom.
+const MAX_IMAGE_HEIGHT = 340;
+function attachmentRuns(rPr, env, files) {
+    return files.map(file => {
+        if (!file.image) return tagImages(rPr, env, [{ text: file.name, style: null }]);
+        const scale = Math.min(1, env.width() / file.w, MAX_IMAGE_HEIGHT / file.h);
+        const img = { w: Math.round(file.w * scale), h: Math.round(file.h * scale) };
+        const rel = env.media.add({ key: 'pj:' + file.id, bytes: file.bytes, ext: file.ext });
+        return `<w:r>${mergeRPr(rPr, { 'w:shd': null, 'w:highlight': null, 'w:u': null, 'w:bdr': null })}${drawingXml(rel, img, file.name)}</w:r>`;
+    }).join(runXml(rPr, {}, ' '));
+}
+
+// Télécharge les pièces jointes citées par les colonnes de type Pièce jointe
+// (ligne et tables liées), une fois par lot : info.files = id -> fichier.
+async function loadAttachments(batch, data, info) {
+    if (!info) return;
+    const wanted = new Set();
+    const scan = (row, spec) => {
+        if (!row || !spec) return;
+        for (const key in row) {
+            const s = spec[sanitizeKey(key)];
+            if (s && s.type === 'Attachments') refIds(row[key]).forEach(id => wanted.add(id));
+        }
+    };
+    scan(data, info.root);
+    for (const [key, spec] of info.byKey) {
+        const rows = Object.keys(data).find(k => sanitizeKey(k) === key);
+        if (rows && Array.isArray(data[rows])) data[rows].forEach(row => scan(row, spec));
+    }
+    if (!wanted.size) return;
+    const meta = await fetchTableCached(batch.cache, '_grist_Attachments');
+    const index = new Map(meta.id.map((id, i) => [id, i]));
+    info.files = info.files || new Map();
+    await Promise.all([...wanted].map(async (id) => {
+        const i = index.get(id);
+        if (i === undefined) return;
+        const name = meta.fileName[i] || `piece-jointe-${id}`;
+        const ext = (/\.([a-z0-9]+)$/i.exec(name) || [])[1];
+        const w = meta.imageWidth ? meta.imageWidth[i] : 0, h = meta.imageHeight ? meta.imageHeight[i] : 0;
+        const file = { id, name, ext: ext && ext.toLowerCase(), w, h, image: false };
+        if (IMAGE_TYPES[file.ext] && w > 0 && h > 0) {
+            try {
+                file.bytes = new Uint8Array(await cached(batch.cache, 'pj:' + id, () => downloadAttachment(id)));
+                file.image = true;
+                if (file.ext === 'jpeg') file.ext = 'jpg';
+            } catch (e) {
+                batch.notes && batch.notes.add(`Pièce jointe « ${name} » illisible : son nom est inséré à la place.`);
+            }
+        }
+        info.files.set(id, file);
+    }));
+}
+
+async function downloadAttachment(id) {
+    const token = await grist.docApi.getAccessToken({ readOnly: true });
+    const response = await fetch(`${token.baseUrl}/attachments/${id}/download?auth=${token.token}`);
+    if (!response.ok) throw new Error(`Pièce jointe ${id} : ${response.status}`);
+    return response.arrayBuffer();
+}
+
 function stepsImage(env, pPr, choices, current, fill) {
     const img = drawSteps(env.draw, choices, current, fill, env.width());
-    const rel = env.media.add(img.data);
+    const rel = env.media.add({ key: img.data, data: img.data, ext: 'png' });
     const alt = choices.map((c, i) => (i === current ? `[${c}]` : c)).join(' > ');
     return `<w:p>${pPr}<w:r>${drawingXml(rel, img, alt)}</w:r></w:p>`;
 }
 
-// Images ajoutées au DOCX : word/media, relations de la partie, type png
+const IMAGE_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', bmp: 'image/bmp' };
+
+// Images ajoutées au DOCX : word/media, relations de la partie, types de contenu.
+// media : { key (doublons), data (dataURL) ou bytes, ext }
 function mediaStore(zip) {
     let next = 0;
-    const files = new Map(); // dataURL -> chemin du média
+    const files = new Map(); // clé -> chemin du média
     const rels = new Map();  // partie -> { xml, ids: Map(chemin -> rId) }
-    const types = zip.file('[Content_Types].xml');
-    if (types && !/Extension="png"/i.test(types.asText())) {
-        zip.file('[Content_Types].xml', types.asText().replace('</Types>', '<Default Extension="png" ContentType="image/png"/></Types>'));
-    }
+    const declareType = (ext) => {
+        const types = zip.file('[Content_Types].xml');
+        if (types && !new RegExp(`Extension="${ext}"`, 'i').test(types.asText())) {
+            zip.file('[Content_Types].xml', types.asText().replace('</Types>', `<Default Extension="${ext}" ContentType="${IMAGE_TYPES[ext]}"/></Types>`));
+        }
+    };
     return {
         forPart(part) {
             const relsPath = part.replace(/^word\/(.*)$/, 'word/_rels/$1.rels');
             return {
-                add(data) {
-                    if (!files.has(data)) {
-                        const name = `media/rendu_${files.size + 1}.png`;
-                        const bin = atob(data.slice(data.indexOf(',') + 1));
-                        const bytes = new Uint8Array(bin.length);
-                        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+                add(media) {
+                    if (!files.has(media.key)) {
+                        const name = `media/rendu_${files.size + 1}.${media.ext}`;
+                        let bytes = media.bytes;
+                        if (!bytes) {
+                            const bin = atob(media.data.slice(media.data.indexOf(',') + 1));
+                            bytes = new Uint8Array(bin.length);
+                            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+                        }
+                        declareType(media.ext);
                         zip.file('word/' + name, bytes);
-                        files.set(data, name);
+                        files.set(media.key, name);
                     }
-                    const target = files.get(data);
+                    const target = files.get(media.key);
                     if (!rels.has(relsPath)) {
                         const f = zip.file(relsPath);
                         rels.set(relsPath, { xml: f ? f.asText() : '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>', ids: new Map() });
@@ -677,7 +670,8 @@ function textWidthPx(zip) {
 function cellWidthPx(xml, offset, fallback) {
     const open = Math.max(xml.lastIndexOf('<w:tc>', offset), xml.lastIndexOf('<w:tc ', offset));
     if (open < 0 || xml.lastIndexOf('</w:tc>', offset) > open) return fallback;
-    const m = /<w:tcW w:w="(\d+)" w:type="dxa"\/>/.exec(xml.slice(open, offset));
+    const tcW = /<w:tcW\b[^>]*\/>/.exec(xml.slice(open, offset));
+    const m = tcW && /w:type="dxa"/.test(tcW[0]) && /w:w="(\d+)"/.exec(tcW[0]);
     return m ? Math.max(120, (+m[1] - 216) / 15) : fallback * 0.5;
 }
 
@@ -705,21 +699,17 @@ function replaceBlocks(xml, registry, env, pageWidth) {
         const texts = [...paragraph.matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g)].map(m => m[1]).join('');
         const m = /^\s*(\d+)\s*$/.exec(texts);
         const render = m && registry[+m[1]];
-        if (!render || !render.block || /<w:(?:drawing|pict|object|sectPr)\b/.test(paragraph)) return paragraph;
-        if (env.draw) {
-            // Image dans le paragraphe d'origine (alignement, espacement conservés)
-            const pPr = (/^<w:p(?:\s[^>]*)?>\s*(<w:pPr>[\s\S]*?<\/w:pPr>)/.exec(paragraph) || [])[1] || '';
-            const width = cellWidthPx(xml, offset, pageWidth);
-            return render.block({ ...env, width: () => width }, pPr) + (cellEnd || '');
-        }
-        // Une cellule doit se terminer par un paragraphe
-        return render.block(env) + (cellEnd ? '<w:p/>' + cellEnd : '');
+        if (!render || !render.block || !env.draw || /<w:(?:drawing|pict|object|sectPr)\b/.test(paragraph)) return paragraph;
+        // Image dans le paragraphe d'origine (alignement, espacement conservés)
+        const pPr = (/^<w:p(?:\s[^>]*)?>\s*(<w:pPr>[\s\S]*?<\/w:pPr>)/.exec(paragraph) || [])[1] || '';
+        const width = cellWidthPx(xml, offset, pageWidth);
+        return render.block({ ...env, width: () => width }, pPr) + (cellEnd || '');
     });
 }
 
 // Run contenant des marqueurs : découpé, chaque marqueur remplacé par ses runs
 function replaceRuns(xml, registry, env) {
-    return xml.replace(/<w:r(?:\s[^>]*)?>(?:(?!<w:r[ >])[\s\S])*?<\/w:r>/g, (run) => {
+    return xml.replace(/<w:r(?:\s[^>]*)?>(?:(?!<w:r[ >])[\s\S])*?<\/w:r>/g, (run, offset) => {
         if (run.indexOf(MARK_OPEN) < 0) return run;
         const open = /^<w:r(?:\s[^>]*)?>/.exec(run)[0];
         let inner = run.slice(open.length, -'</w:r>'.length);
@@ -740,7 +730,8 @@ function replaceRuns(xml, registry, env) {
                 if (before) pending += `<w:t xml:space="preserve">${before}</w:t>`;
                 flush();
                 const render = registry[+m[1]];
-                out += render ? render.inline(rPr, env) : '';
+                const local = env.draw ? { ...env, width: () => cellWidthPx(xml, offset, env.width()) } : env;
+                out += !render ? '' : env.draw ? render.inline(rPr, local) : (render.raw ? runXml(rPr, {}, render.raw) : '');
                 last = m.index + m[0].length;
             }
             const after = t[2].slice(last);

@@ -172,6 +172,7 @@ async function dispatchGeneration(received, batch) {
         await addLinkedTables(data, record, getReferencedTables(state.templateBuffer), batch);
         // Types et couleurs des colonnes Grist (voir render-tools.js)
         const renderInfo = await loadRenderInfo(batch);
+        await loadAttachments(batch, data, renderInfo);
         return generateDocxBlob(data, state.templateBuffer, batch.unknownTags, renderInfo);
     } else if (state.templateType === 'pdf') {
         return await generatePdfBlob(data, state.templateBuffer);

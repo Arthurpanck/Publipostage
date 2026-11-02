@@ -24,6 +24,7 @@ const COLS = [
     [23, 4, 'Equipe', 'Ref:Equipes', 'Équipe', '', 6],
     [24, 4, 'Pole_equipe', 'Ref:Equipes', 'Pôle', '', 7],
     [25, 4, 'Collegues', 'RefList:Personnes', 'Collègues', '', 9],
+    [29, 4, 'Photo', 'Attachments', 'Photo', W({ widget: 'Attachments', height: '36' }), 0],
 ];
 const columns = rows => Object.fromEntries(Object.keys(rows[0]).map(k => [k, rows.map(r => r[k])]));
 const TABLES = {
@@ -32,6 +33,7 @@ const TABLES = {
         id: COLS.map(c => c[0]), parentId: COLS.map(c => c[1]), colId: COLS.map(c => c[2]), type: COLS.map(c => c[3]),
         label: COLS.map(c => c[4]), widgetOptions: COLS.map(c => c[5]), visibleCol: COLS.map(c => c[6]),
     },
+    _grist_Attachments: { id: [1, 2], fileName: ['portrait.png', 'contrat.pdf'], fileSize: [68, 9000], imageWidth: [800, 0], imageHeight: [600, 0] },
     _grist_DocInfo: { id: [1], documentSettings: [W({ locale: 'fr-FR', engine: 'python3' })] },
     Equipes: columns([
         { id: 1, Nom: 'Talents', Pole: 'RH' }, { id: 2, Nom: 'Maintenance', Pole: 'Technique' }, { id: 3, Nom: 'Comptabilité', Pole: 'Finance' }]),
@@ -40,9 +42,9 @@ const TABLES = {
 };
 // Lignes telles que reçues par le widget (onRecords : valeurs décodées)
 const RECORDS = [
-    { id: 1, Nom: 'Camille Durand', Statut: 'CDI', Competences: ['Sourcing', 'Entretiens', 'Anglais'], Etape: 'Accueil', Mutuelle: true, Teletravail: false, Salaire: 2450, Objectif: 4000, Taux: 0.6125, Conges_pris: 18, Conges_acquis: 25, Equipe: 1, Pole_equipe: 1, Collegues: [1, 2] },
-    { id: 2, Nom: 'Karim Benali', Statut: 'CDD', Competences: ['LinkedIn Recruiter'], Etape: 'Offre', Mutuelle: false, Teletravail: true, Salaire: 2100, Objectif: 2000, Taux: 1.05, Conges_pris: 5, Conges_acquis: 25, Equipe: 2, Pole_equipe: 2, Collegues: [3] },
-    { id: 3, Nom: 'Sophie de la Tour', Statut: "Période d'essai", Competences: null, Etape: 'Autonome', Mutuelle: true, Teletravail: true, Salaire: 3100, Objectif: 4000, Taux: 0.775, Conges_pris: 0, Conges_acquis: 4, Equipe: 3, Pole_equipe: 3, Collegues: null },
+    { id: 1, Nom: 'Camille Durand', Statut: 'CDI', Competences: ['Sourcing', 'Entretiens', 'Anglais'], Etape: 'Accueil', Mutuelle: true, Teletravail: false, Salaire: 2450, Objectif: 4000, Taux: 0.6125, Conges_pris: 18, Conges_acquis: 25, Equipe: 1, Pole_equipe: 1, Collegues: [1, 2], Photo: [1, 2] },
+    { id: 2, Nom: 'Karim Benali', Statut: 'CDD', Competences: ['LinkedIn Recruiter'], Etape: 'Offre', Mutuelle: false, Teletravail: true, Salaire: 2100, Objectif: 2000, Taux: 1.05, Conges_pris: 5, Conges_acquis: 25, Equipe: 2, Pole_equipe: 2, Collegues: [3], Photo: null },
+    { id: 3, Nom: 'Sophie de la Tour', Statut: "Période d'essai", Competences: null, Etape: 'Autonome', Mutuelle: true, Teletravail: true, Salaire: 3100, Objectif: 4000, Taux: 0.775, Conges_pris: 0, Conges_acquis: 4, Equipe: 3, Pole_equipe: 3, Collegues: null, Photo: null },
 ];
 const encode = v => (Array.isArray(v) ? ['L', ...v] : v);
 TABLES.Salaries = Object.fromEntries(Object.keys(RECORDS[0]).map(k => [k, RECORDS.map(r => encode(r[k]))]));
@@ -50,7 +52,15 @@ TABLES.Salaries = Object.fromEntries(Object.keys(RECORDS[0]).map(k => [k, RECORD
 function gristMock(fetched = []) {
     return {
         getSelectedTableId: async () => 'Salaries',
-        docApi: { fetchTable: async (t) => { fetched.push(t); if (!TABLES[t]) throw new Error('table inconnue ' + t); return TABLES[t]; } },
+        docApi: {
+            fetchTable: async (t) => { fetched.push(t); if (!TABLES[t]) throw new Error('table inconnue ' + t); return TABLES[t]; },
+            getAccessToken: async () => ({ baseUrl: 'https://grist.test/api/docs/demo', token: 'jeton' }),
+        },
     };
 }
-module.exports = { TABLES, RECORDS, gristMock };
+// Téléchargement simulé des pièces jointes (PNG de 1 x 1)
+const PNG = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64'));
+function fetchMock(urls = []) {
+    return async (url) => { urls.push(url); return { ok: true, status: 200, arrayBuffer: async () => PNG.buffer.slice(0) }; };
+}
+module.exports = { TABLES, RECORDS, gristMock, fetchMock };
