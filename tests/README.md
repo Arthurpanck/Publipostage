@@ -173,5 +173,13 @@ par des runs qui héritent de la mise en forme de la balise.
 (`tests/fixtures/rendus-grist.cjs` : métadonnées, couleurs, références) et
 génère de vrais DOCX. Pour vérifier dans Grist : une table avec ces types, un
 modèle contenant chaque balise, puis comparer l'aperçu, le document et le ZIP.
-La barre utilise une police à chasse fixe (Consolas) : son remplissage est
-précis à 1/20 près.
+Dans le navigateur, ces rendus sont dessinés au canvas puis insérés en
+images PNG (4x, une seule copie par image identique), avec le texte en
+description. Ailleurs (tests Node), un repli en texte Word est utilisé : la
+barre en police à chasse fixe, précise à 1/20 près, et les étapes en tableau.
+Les deux voies sont testées ; la voie image avec un canvas simulé.
+
+Vérification visuelle faite avec Chromium (canvas réel) puis l'aperçu
+docx-preview du widget et LibreOffice. LibreOffice ignore le décalage
+vertical des images (`w:position`) : les étiquettes y paraissent un peu hautes.
+À vérifier dans Word.

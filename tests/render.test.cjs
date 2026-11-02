@@ -143,3 +143,49 @@ test('le texte voisin de la balise garde sa mise en forme', async () => {
     assert.deepEqual(r.map(x => x.text), ['a ', '☑︎', ' b', ' c']);
     assert.ok(r.slice(0, 3).every(x => /<w:i\/>/.test(x.rPr)));
 });
+
+// Canvas simulé : la voie « images » (navigateur) produit des PNG insérés en ligne
+function fakeDocument(calls) {
+    const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+    const ctx2d = new Proxy({}, { get: (t, k) => (k in t ? t[k] : k === 'measureText' ? (s) => ({ width: String(s).length * 7 }) : () => {}), set: (t, k, v) => { t[k] = v; return true; } });
+    return { createElement: () => ({ getContext: () => ctx2d, toDataURL: () => { calls.push(1); return PNG; } }) };
+}
+async function generateDrawn(body, record = RECORDS[0]) {
+    const calls = [];
+    const app = loadApp({ grist: gristMock(), document: fakeDocument(calls), atob });
+    Object.assign(app, { __rec: record, __buffer: template(app, body), __batch: { cache: new Map(), viewRows: RECORDS, unknownTags: new Set(), notes: new Set() } });
+    const blob = await vm.runInContext(`(async () => {
+        const data = rowData(__rec);
+        await addLinkedTables(data, __rec, getReferencedTables(__buffer), __batch);
+        return generateDocxBlob(data, __buffer, __batch.unknownTags, await loadRenderInfo(__batch));
+    })()`, app);
+    return { zip: new app.PizZip(await blob.arrayBuffer()), calls };
+}
+
+test('navigateur : étiquettes, case, barre et étapes dessinées en images', async () => {
+    const body = para('{Statut} {Competences} {Mutuelle} {Salaire|barre:Objectif:Taux}') + para('{Etape|etapes}');
+    const { zip, calls } = await generateDrawn(body);
+    const xml = zip.file('word/document.xml').asText();
+    // 1 + 3 étiquettes, 1 case, 1 barre, 1 frise
+    assert.equal((xml.match(/<w:drawing>/g) || []).length, 7);
+    assert.equal(calls.length, 7);
+    assert.match(xml, /descr="CDI"/);
+    assert.match(xml, /descr="Case cochée"/);
+    assert.match(xml, /descr="61 % 2 450,00 € sur 4 000,00 €"/);
+    assert.match(xml, /descr="Offre &gt; Signature &gt; \[Accueil\] &gt; Formation &gt; Autonome"/);
+    assert.equal((xml.match(/<w:tbl>/g) || []).length, 0);
+    // Image identique (même PNG) : un seul média, une seule relation
+    assert.deepEqual(Object.keys(zip.files).filter(f => f.startsWith('word/media/')), ['word/media/rendu_1.png']);
+    const rels = zip.file('word/_rels/document.xml.rels').asText();
+    assert.equal((rels.match(/<Relationship /g) || []).length, 1);
+    assert.match(zip.file('[Content_Types].xml').asText(), /Extension="png" ContentType="image\/png"/);
+    // Les étiquettes sont abaissées pour être centrées sur le texte
+    assert.match(xml, /<w:position w:val="-\d+"\/><\/w:rPr><w:drawing>/);
+});
+
+test('navigateur : identifiants d’images uniques dans le document', async () => {
+    const { zip } = await generateDrawn(para('{Competences} {Collegues}'));
+    const ids = [...zip.file('word/document.xml').asText().matchAll(/<wp:docPr id="(\d+)"/g)].map(m => m[1]);
+    assert.equal(ids.length, 5);
+    assert.equal(new Set(ids).size, 5);
+});

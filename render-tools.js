@@ -12,9 +12,13 @@
  * Texte, nombres sans option et dates restent insérés tels quels.
  *
  * Principe : le parser docxtemplater renvoie un marqueur à la place de la
- * valeur ; après le rendu, chaque marqueur est remplacé par des runs Word qui
- * héritent de la mise en forme de la balise (police, taille…), ou par un
- * tableau pour des étapes seules dans leur paragraphe.
+ * valeur ; après le rendu, chaque marqueur est remplacé :
+ *   - dans le navigateur, par une image PNG dessinée au canvas (4x), fidèle à
+ *     la maquette : pilules, case, barre arrondie, cercles reliés. Les
+ *     tailles suivent la police de la balise, l'image est centrée sur la
+ *     ligne (w:position) et porte le texte en description (accessibilité) ;
+ *   - sans canvas (tests Node), par des runs Word équivalents en texte, qui
+ *     héritent de la mise en forme de la balise, ou un tableau pour les étapes.
  */
 
 const RENDER = Symbol('render');
@@ -177,7 +181,9 @@ function lookupScopes(context, name) {
     return undefined;
 }
 
-// Renvoie { inline(rPr) -> runs XML, block?() -> XML } ou null (valeur brute)
+// Renvoie { inline(rPr, env) -> runs XML, block?(env) -> XML } ou null (valeur
+// brute). env.draw (canvas du navigateur) : rendus dessinés en images nettes,
+// fidèles à la maquette ; sans canvas : repli en texte Word.
 function renderer(ctx, { value, spec, format, args, tag, lookup }) {
     const info = ctx.info || {};
     if (format === 'barre') {
@@ -186,7 +192,8 @@ function renderer(ctx, { value, spec, format, args, tag, lookup }) {
         if (!goal) ctx.unknownTags.add(args[0]);
         if (args[1] && !pct) ctx.unknownTags.add(args[1]);
         if (!goal || (args[1] && !pct)) return null;
-        return { inline: rPr => barRuns(rPr, { value, spec }, goal, pct, info) };
+        const actual = { value, spec };
+        return { inline: (rPr, env) => env.draw ? barImage(rPr, env, actual, goal, pct, info) : barRuns(rPr, actual, goal, pct, info) };
     }
     if (format === 'etapes') {
         const choices = spec && spec.opts && spec.opts.choices;
@@ -195,24 +202,28 @@ function renderer(ctx, { value, spec, format, args, tag, lookup }) {
             return null;
         }
         const color = (choiceStyle(spec.opts, value) || {}).fill;
+        const current = choices.indexOf(value);
         return {
-            inline: rPr => stepsRuns(rPr, choices, choices.indexOf(value), color),
-            block: () => stepsTable(choices, choices.indexOf(value), color),
+            inline: rPr => stepsRuns(rPr, choices, current, color),
+            block: (env, pPr) => env.draw ? stepsImage(env, pPr, choices, current, color) : stepsTable(choices, current, color),
         };
     }
     if (!spec) return null;
+    const tags = items => ({ inline: (rPr, env) => env.draw ? tagImages(rPr, env, items) : tagRuns(rPr, items) });
     switch (spec.type) {
-        case 'Bool':
-            return { inline: rPr => checkboxRun(rPr, value === true || value === 1 || value === 'true') };
+        case 'Bool': {
+            const checked = value === true || value === 1 || value === 'true';
+            return { inline: (rPr, env) => env.draw ? checkboxImage(rPr, env, checked) : checkboxRun(rPr, checked) };
+        }
         case 'Choice':
             if (value === null || value === '') return { inline: () => '' };
-            return { inline: rPr => tagRuns(rPr, [{ text: String(value), style: choiceStyle(spec.opts, value) }]) };
+            return tags([{ text: String(value), style: choiceStyle(spec.opts, value) }]);
         case 'ChoiceList':
-            return { inline: rPr => tagRuns(rPr, listValue(value).map(v => ({ text: String(v), style: choiceStyle(spec.opts, v) }))) };
+            return tags(listValue(value).map(v => ({ text: String(v), style: choiceStyle(spec.opts, v) })));
         case 'Ref':
         case 'RefList':
-            return { inline: rPr => tagRuns(rPr, refIds(value).map(id => (spec.refs && spec.refs.get(id)) || { text: String(id), style: null })
-                .filter(r => r.text !== '')) };
+            return tags(refIds(value).map(id => (spec.refs && spec.refs.get(id)) || { text: String(id), style: null })
+                .filter(r => r.text !== ''));
         default:
             return null;
     }
@@ -420,32 +431,287 @@ function stepsTable(choices, current, fill) {
 }
 
 // ---------------------------------------------------------------------------
+// Rendus dessinés (canvas) : mêmes proportions que la maquette, à 4x pour
+// l'impression. Les tailles suivent la taille de police de la balise.
+// ---------------------------------------------------------------------------
+
+const DRAW_SCALE = 4;
+const SANS = '"Segoe UI", "Helvetica Neue", Arial, "Liberation Sans", sans-serif';
+const MONO = 'Consolas, "SFMono-Regular", Menlo, "DejaVu Sans Mono", "Liberation Mono", monospace';
+const BODY_PX = 14.667; // 11 pt, taille de référence de la maquette
+
+function canvasDrawer() {
+    if (typeof document === 'undefined' || !document || typeof document.createElement !== 'function') return null;
+    let probe;
+    try { probe = document.createElement('canvas').getContext('2d'); } catch (e) { return null; }
+    if (!probe) return null;
+    return {
+        measure(font, text) { probe.font = font; return probe.measureText(text).width; },
+        paint(w, h, draw) {
+            const c = document.createElement('canvas');
+            c.width = Math.ceil(w * DRAW_SCALE); c.height = Math.ceil(h * DRAW_SCALE);
+            const g = c.getContext('2d');
+            g.scale(DRAW_SCALE, DRAW_SCALE);
+            draw(g);
+            return { data: c.toDataURL('image/png'), w, h };
+        },
+    };
+}
+
+// Taille de police de la balise, en px (11 pt par défaut)
+function fontPx(rPr) {
+    const m = /<w:sz w:val="(\d+)"/.exec(rPr || '');
+    return (m ? +m[1] / 2 : 11) * 96 / 72;
+}
+
+function roundRect(g, x, y, w, h, r) {
+    r = Math.min(r, h / 2, w / 2);
+    g.beginPath();
+    g.moveTo(x + r, y);
+    g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r);
+    g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r);
+    g.closePath();
+}
+const css = hex => '#' + hex;
+
+// Étiquette en pilule : police 600 13 px, marges 5 × 11 px, fond et texte teintés
+function drawTag(draw, text, style, px) {
+    const k = px / BODY_PX, fs = 13 * k;
+    const font = `600 ${fs}px ${SANS}`;
+    const padX = 11 * k, padY = 5 * k, h = fs + 2 * padY;
+    const w = draw.measure(font, text) + 2 * padX;
+    const { bg, fg } = tagColors(style && style.fill);
+    return draw.paint(w, h, g => {
+        roundRect(g, 0, 0, w, h, h / 2); g.fillStyle = css(bg); g.fill();
+        g.font = font; g.fillStyle = css(fg); g.textBaseline = 'middle';
+        g.fillText(text, padX, h / 2 + fs * 0.04);
+    });
+}
+
+// Case carrée fine, coche tracée (comme ☑ / ☐)
+function drawCheckbox(draw, checked, px) {
+    const s = Math.round(px * 0.86 * 2) / 2, lw = Math.max(1, s * 0.08);
+    return draw.paint(s, s, g => {
+        roundRect(g, lw / 2, lw / 2, s - lw, s - lw, s * 0.12);
+        g.lineWidth = lw; g.strokeStyle = '#1F1F1F'; g.stroke();
+        if (!checked) return;
+        g.beginPath(); g.moveTo(s * 0.24, s * 0.52); g.lineTo(s * 0.43, s * 0.71); g.lineTo(s * 0.77, s * 0.29);
+        g.lineWidth = lw * 1.5; g.lineCap = 'round'; g.lineJoin = 'round'; g.stroke();
+    });
+}
+
+// [61 %] [ 2 450,00 €  ░░░░] sur 4 000,00 € : mono 10,5 pt, barre 260 px arrondie
+function drawBar(draw, text, fraction, pctText, goalText, px) {
+    const k = px / BODY_PX, fs = 14 * k, font = `400 ${fs}px ${MONO}`;
+    const padX = 10 * k, padY = 5 * k, gap = 10 * k, h = Math.round(fs * 1.15 + 2 * padY);
+    const barW = Math.max(260 * k, draw.measure(font, text) + 2 * padX + 30 * k);
+    const pctW = pctText ? Math.max(3.2 * fs, draw.measure(font, pctText)) : 0;
+    const goal = 'sur ' + goalText;
+    const w = (pctText ? pctW + gap : 0) + barW + gap + draw.measure(font, goal);
+    const x0 = pctText ? pctW + gap : 0;
+    const f = Math.min(Math.max(fraction, 0), 1);
+    return draw.paint(w, h, g => {
+        g.font = font; g.textBaseline = 'middle';
+        if (pctText) { g.fillStyle = '#0A4A50'; g.textAlign = 'right'; g.fillText(pctText, pctW, h / 2); g.textAlign = 'left'; }
+        roundRect(g, x0 + 0.5, 0.5, barW - 1, h - 1, 4 * k);
+        g.save(); g.clip(); g.fillStyle = '#FFFFFF'; g.fillRect(x0, 0, barW, h);
+        g.fillStyle = css(BAR_FILL); g.fillRect(x0, 0, barW * f, h); g.restore();
+        g.lineWidth = 1; g.strokeStyle = '#D3DAE0'; g.stroke();
+        g.fillStyle = '#1F1F1F'; g.fillText(text, x0 + padX, h / 2);
+        g.fillStyle = '#6B7580'; g.fillText(goal, x0 + barW + gap, h / 2);
+    });
+}
+
+// Cercles reliés : 20 px, bordure 2 px, ✓ dans les étapes franchies, halo sur
+// l'étape en cours, libellés 8,5 pt dessous. Largeur : celle du paragraphe.
+function drawSteps(draw, choices, current, fill, width) {
+    const n = choices.length, k = 1, D = 20 * k, R = D / 2, halo = 3 * k;
+    const lfs = 11.33 * k, top = halo + 1, cy = top + R, ly = top + D + 5 * k;
+    const h = Math.ceil(ly + lfs * 1.35 + 2);
+    const accent = css(accentColor(fill)), grey = '#D5DADF', haloColor = css(toHex(mix(hexToRgb(accentColor(fill)), [255, 255, 255], 0.8)));
+    const step = width / n, x = i => (i + 0.5) * step;
+    const state = i => (current < 0 ? 'next' : i < current ? 'done' : i === current ? 'cur' : 'next');
+    return draw.paint(width, h, g => {
+        for (let i = 1; i < n; i++) {
+            g.fillStyle = current >= 0 && i <= current ? accent : grey;
+            g.fillRect(x(i - 1), cy - k, x(i) - x(i - 1), 2 * k);
+        }
+        choices.forEach((label, i) => {
+            const s = state(i);
+            if (s === 'cur') { g.beginPath(); g.arc(x(i), cy, R + halo, 0, 2 * Math.PI); g.fillStyle = haloColor; g.fill(); }
+            g.beginPath(); g.arc(x(i), cy, R - k, 0, 2 * Math.PI);
+            g.fillStyle = s === 'done' ? accent : '#FFFFFF'; g.fill();
+            g.lineWidth = 2 * k; g.strokeStyle = s === 'next' ? grey : accent; g.stroke();
+            if (s === 'done') {
+                g.beginPath(); g.moveTo(x(i) - 4.2 * k, cy + 0.2 * k); g.lineTo(x(i) - 1.2 * k, cy + 3.2 * k); g.lineTo(x(i) + 4.6 * k, cy - 3.4 * k);
+                g.lineWidth = 1.8 * k; g.strokeStyle = '#FFFFFF'; g.lineCap = 'round'; g.lineJoin = 'round'; g.stroke();
+            }
+            g.font = `${s === 'cur' ? 700 : 400} ${lfs}px ${SANS}`;
+            g.fillStyle = s === 'cur' ? '#1F1F1F' : '#777777'; g.textAlign = 'center'; g.textBaseline = 'top';
+            let t = String(label);
+            while (t.length > 1 && g.measureText(t).width > step - 4) t = t.slice(0, -2) + '…';
+            g.fillText(t, x(i), ly);
+        });
+    });
+}
+
+// Couleurs des étiquettes de la maquette : fond à 84 % de blanc, texte à 40 % de noir
+function tagColors(fill) {
+    const rgb = hexToRgb(fill);
+    if (!rgb) return { bg: 'ECEEF1', fg: '2B2F36' };
+    return { bg: toHex(mix(rgb, [255, 255, 255], 0.84)), fg: toHex(mix(rgb, [0, 0, 0], 0.4)) };
+}
+
+// Image en ligne, centrée sur le texte (abaissée avec w:position)
+function imageRun(rPr, env, img, alt) {
+    const rel = env.media.add(img.data);
+    const fontPt = fontPx(rPr) * 0.75, hPt = img.h * 0.75;
+    const lower = Math.max(0, Math.round((hPt / 2 - 0.33 * fontPt) * 2));
+    const props = mergeRPr(rPr, {
+        'w:position': lower ? `<w:position w:val="-${lower}"/>` : null,
+        'w:shd': null, 'w:highlight': null, 'w:u': null, 'w:bdr': null,
+    });
+    return `<w:r>${props}${drawingXml(rel, img, alt)}</w:r>`;
+}
+
+function drawingXml(rel, img, alt) {
+    const cx = Math.round(img.w * 9525), cy = Math.round(img.h * 9525);
+    return '<w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0">'
+        + `<wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/>`
+        + `<wp:docPr id="${rel.id}" name="Rendu ${rel.id}" descr="${xmlEscape(alt).replace(/"/g, '&quot;')}"/>`
+        + '<wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr>'
+        + '<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+        + '<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+        + `<pic:nvPicPr><pic:cNvPr id="${rel.id}" name="rendu_${rel.id}.png"/><pic:cNvPicPr/></pic:nvPicPr>`
+        + `<pic:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="${rel.rId}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>`
+        + `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>`
+        + '</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>';
+}
+
+function tagImages(rPr, env, items) {
+    const px = fontPx(rPr);
+    return items.map(item => imageRun(rPr, env, drawTag(env.draw, item.text, item.style, px), item.text))
+        .join(runXml(rPr, {}, ' '));
+}
+
+function checkboxImage(rPr, env, checked) {
+    return imageRun(rPr, env, drawCheckbox(env.draw, checked, fontPx(rPr)), checked ? 'Case cochée' : 'Case non cochée');
+}
+
+function barImage(rPr, env, actual, goal, pct, info) {
+    const a = Number(actual.value), b = Number(goal.value);
+    let fraction = percentFraction(pct);
+    if (fraction === null) fraction = b ? a / b : 0;
+    if (!isFinite(fraction)) fraction = 0;
+    const pctText = pct ? formatNumber(fraction, { opts: { numMode: 'percent', maxDecimals: (pct.spec && pct.spec.opts && pct.spec.opts.maxDecimals) || 0 } }, info) : null;
+    const text = formatNumber(actual.value, actual.spec, info), goalText = formatNumber(goal.value, goal.spec, info);
+    const img = drawBar(env.draw, text, fraction, pctText, goalText, fontPx(rPr));
+    return imageRun(rPr, env, img, `${pctText ? pctText + ' ' : ''}${text} sur ${goalText}`);
+}
+
+function stepsImage(env, pPr, choices, current, fill) {
+    const img = drawSteps(env.draw, choices, current, fill, env.width());
+    const rel = env.media.add(img.data);
+    const alt = choices.map((c, i) => (i === current ? `[${c}]` : c)).join(' > ');
+    return `<w:p>${pPr}<w:r>${drawingXml(rel, img, alt)}</w:r></w:p>`;
+}
+
+// Images ajoutées au DOCX : word/media, relations de la partie, type png
+function mediaStore(zip) {
+    let next = 0;
+    const files = new Map(); // dataURL -> chemin du média
+    const rels = new Map();  // partie -> { xml, ids: Map(chemin -> rId) }
+    const types = zip.file('[Content_Types].xml');
+    if (types && !/Extension="png"/i.test(types.asText())) {
+        zip.file('[Content_Types].xml', types.asText().replace('</Types>', '<Default Extension="png" ContentType="image/png"/></Types>'));
+    }
+    return {
+        forPart(part) {
+            const relsPath = part.replace(/^word\/(.*)$/, 'word/_rels/$1.rels');
+            return {
+                add(data) {
+                    if (!files.has(data)) {
+                        const name = `media/rendu_${files.size + 1}.png`;
+                        const bin = atob(data.slice(data.indexOf(',') + 1));
+                        const bytes = new Uint8Array(bin.length);
+                        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+                        zip.file('word/' + name, bytes);
+                        files.set(data, name);
+                    }
+                    const target = files.get(data);
+                    if (!rels.has(relsPath)) {
+                        const f = zip.file(relsPath);
+                        rels.set(relsPath, { xml: f ? f.asText() : '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>', ids: new Map() });
+                    }
+                    const r = rels.get(relsPath);
+                    if (!r.ids.has(target)) {
+                        const rId = `rIdRendu${r.ids.size + 1}`;
+                        r.ids.set(target, rId);
+                        r.xml = r.xml.replace('</Relationships>', `<Relationship Id="${rId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="${target}"/></Relationships>`);
+                    }
+                    return { rId: r.ids.get(target), id: 4000 + (++next) };
+                },
+            };
+        },
+        flush() { for (const [path, r] of rels) if (r.ids.size) zip.file(path, r.xml); },
+    };
+}
+
+// Largeur utile en px : cellule qui contient le paragraphe, sinon la page
+function textWidthPx(zip) {
+    const doc = zip.file('word/document.xml');
+    const xml = doc ? doc.asText() : '';
+    const sect = xml.slice(xml.lastIndexOf('<w:sectPr'));
+    const pg = /<w:pgSz[^>]*\bw:w="(\d+)"/.exec(sect);
+    const left = /<w:pgMar[^>]*\bw:left="(\d+)"/.exec(sect), right = /<w:pgMar[^>]*\bw:right="(\d+)"/.exec(sect);
+    const twips = pg ? +pg[1] - (left ? +left[1] : 1134) - (right ? +right[1] : 1134) : 9638;
+    return Math.max(240, twips / 15);
+}
+function cellWidthPx(xml, offset, fallback) {
+    const open = Math.max(xml.lastIndexOf('<w:tc>', offset), xml.lastIndexOf('<w:tc ', offset));
+    if (open < 0 || xml.lastIndexOf('</w:tc>', offset) > open) return fallback;
+    const m = /<w:tcW w:w="(\d+)" w:type="dxa"\/>/.exec(xml.slice(open, offset));
+    return m ? Math.max(120, (+m[1] - 216) / 15) : fallback * 0.5;
+}
+
+// ---------------------------------------------------------------------------
 // Remplacement des marqueurs après le rendu docxtemplater
 // ---------------------------------------------------------------------------
 
 function applyRenders(zip, registry) {
     if (!registry.length) return;
+    const draw = canvasDrawer();
+    const media = draw ? mediaStore(zip) : null;
+    const pageWidth = draw ? textWidthPx(zip) : 0;
     for (const file of docxTextFiles(zip)) {
         const xml = file.asText();
         if (xml.indexOf(MARK_OPEN) < 0) continue;
-        zip.file(file.name, withTextBoxes(xml, part => replaceRuns(replaceBlocks(part, registry), registry)));
+        const env = { draw, media: media && media.forPart(file.name), width: () => pageWidth };
+        zip.file(file.name, withTextBoxes(xml, part => replaceRuns(replaceBlocks(part, registry, env, pageWidth), registry, env)));
     }
+    if (media) media.flush();
 }
 
 // Paragraphe ne contenant qu'un marqueur à rendu bloc : remplacé par le bloc
-function replaceBlocks(xml, registry) {
-    return xml.replace(/<w:p(?:\s[^>]*)?>(?:(?!<w:p[ />])[\s\S])*?<\/w:p>(<\/w:tc>)?/g, (paragraph, cellEnd) => {
+function replaceBlocks(xml, registry, env, pageWidth) {
+    return xml.replace(/<w:p(?:\s[^>]*)?>(?:(?!<w:p[ />])[\s\S])*?<\/w:p>(<\/w:tc>)?/g, (paragraph, cellEnd, offset) => {
         const texts = [...paragraph.matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g)].map(m => m[1]).join('');
         const m = /^\s*(\d+)\s*$/.exec(texts);
         const render = m && registry[+m[1]];
         if (!render || !render.block || /<w:(?:drawing|pict|object|sectPr)\b/.test(paragraph)) return paragraph;
+        if (env.draw) {
+            // Image dans le paragraphe d'origine (alignement, espacement conservés)
+            const pPr = (/^<w:p(?:\s[^>]*)?>\s*(<w:pPr>[\s\S]*?<\/w:pPr>)/.exec(paragraph) || [])[1] || '';
+            const width = cellWidthPx(xml, offset, pageWidth);
+            return render.block({ ...env, width: () => width }, pPr) + (cellEnd || '');
+        }
         // Une cellule doit se terminer par un paragraphe
-        return render.block() + (cellEnd ? '<w:p/>' + cellEnd : '');
+        return render.block(env) + (cellEnd ? '<w:p/>' + cellEnd : '');
     });
 }
 
 // Run contenant des marqueurs : découpé, chaque marqueur remplacé par ses runs
-function replaceRuns(xml, registry) {
+function replaceRuns(xml, registry, env) {
     return xml.replace(/<w:r(?:\s[^>]*)?>(?:(?!<w:r[ >])[\s\S])*?<\/w:r>/g, (run) => {
         if (run.indexOf(MARK_OPEN) < 0) return run;
         const open = /^<w:r(?:\s[^>]*)?>/.exec(run)[0];
@@ -467,7 +733,7 @@ function replaceRuns(xml, registry) {
                 if (before) pending += `<w:t xml:space="preserve">${before}</w:t>`;
                 flush();
                 const render = registry[+m[1]];
-                out += render ? render.inline(rPr) : '';
+                out += render ? render.inline(rPr, env) : '';
                 last = m.index + m[0].length;
             }
             const after = t[2].slice(last);
