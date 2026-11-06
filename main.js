@@ -11,6 +11,7 @@ let state = {
     templateBuffer: null,
     templateType: null,
     templateName: null,
+    templateHash: null,
     filenameColumn: ''
 };
 
@@ -26,10 +27,16 @@ initUi({
     onDownloadZip: downloadBulk,
 });
 
-// Lancement différé du chargement du template car plante parfois si pas de timeout
-setTimeout(() => {
-    loadSavedTemplate();
-}, 500);
+// Le modèle vit dans les options du widget (voir template-store.js). Grist
+// les envoie au démarrage puis à chaque modification, y compris quand un autre
+// utilisateur change le modèle.
+let optionsSeen = false;
+grist.onOptions(async (options) => {
+    noteOptions(options);
+    const first = !optionsSeen;
+    optionsSeen = true;
+    await applyOptions(options, first);
+});
 
 grist.onRecord(async (record, mappings) => {
     state.filenameColumn = mappings?.filename || '';
@@ -65,37 +72,31 @@ async function handleTemplateUpload(file) {
         return;
     }
 
-    uiToast("Upload et sauvegarde du template...", "normal");
+    uiToast("Enregistrement du modèle...", "normal");
 
     try {
         const buffer = await readFileAsBuffer(file);
-        // Valider avant tout upload ou changement des options persistées.
+        if (buffer.byteLength > TEMPLATE_MAX_BYTES) {
+            uiToast(`Modèle trop lourd (${Math.ceil(buffer.byteLength / 1048576)} Mo) : 8 Mo au plus. Réduisez les images du document.`, "error");
+            return;
+        }
+        // Valider avant de remplacer le modèle enregistré.
         if (type === 'docx') compileDocxTemplate(buffer);
         else await PDFLib.PDFDocument.load(buffer);
 
-        const attachmentId = await uploadAttachmentToGrist(file);
-        if (!attachmentId) {
-            throw new Error("ID de fichier invalide reçu.");
-        }
-
-        // Sauvegarde des informations du template uploadé
-        await grist.setOptions({
-            ...await grist.getOptions(),
-            templateId: attachmentId,
-            templateName: file.name,
-        });
-
-        // Vérification si le fichier est bien sauvegardé
-        const checkId = await grist.getOption('templateId');
-        if (checkId != attachmentId) {
-            uiToast("Attention, cliquer sur 'Enregistrer' en haut de la page !", "error");
-            return;
-        }
-
-        updateTemplateState(buffer, file.name, type);
+        const options = await templateOptions(await grist.getOptions(), buffer, file.name);
+        updateTemplateState(buffer, file.name, type, options.templateHash);
         uiCloseModal();
-        uiToast("Modèle sauvegardé", "success");
 
+        const status = await persistOptions(options);
+        if (status === 'saved') {
+            uiPersistBanner(null);
+            uiToast("Modèle enregistré dans le document", "success");
+        } else if (status === 'readonly') {
+            uiToast("Lecture seule : modèle utilisé pour cette session uniquement", "error");
+        } else {
+            watchPendingTemplate(options.templateHash);
+        }
     } catch (err) {
         console.error(err);
         uiToast("Erreur lors de la sauvegarde : " + err.message, "error");
@@ -227,51 +228,65 @@ function updateActionsState() {
     uiEnableActions(ready && state.currentRecord !== null, ready && state.allRecords.length > 0);
 }
 
-// Récupère le template sauvegardé au chargement de la page.
-// Modèle configuré -> on le charge sans modale ; sinon la modale
-// d'instructions s'affiche automatiquement (premier chargement).
-async function loadSavedTemplate() {
-    try {
-        const templateId = await grist.getOption('templateId');
-        const templateName = await grist.getOption('templateName');
-
-        if (templateId && templateName) {
-            uiToast("Récupération du modèle...", "normal");
-            const type = getTemplateType(templateName);
-            if (!type) throw new Error('Format du modèle sauvegardé non supporté.');
-
-            const buffer = await downloadAttachmentFromGrist(templateId);
-            updateTemplateState(buffer, templateName, type);
-            uiToast("Modèle chargé : " + templateName, "success");
-        } else {
-            uiOpenModal();
-        }
-    } catch (e) {
-        console.warn("Erreur chargement", e);
-        uiOpenModal();
+// Charge le modèle décrit par les options. Sans modèle, la modale
+// d'instructions s'ouvre au premier chargement.
+async function applyOptions(options, first) {
+    const saved = templateFromOptions(options);
+    if (!saved) {
+        if (first && !state.templateBuffer) uiOpenModal();
+        return;
     }
+    if (saved.hash && saved.hash === state.templateHash) return;
+    if (saved.legacyId && saved.legacyId === legacyLoaded) return;
+    const type = getTemplateType(saved.name);
+    if (!type) {
+        uiToast('Format du modèle enregistré non supporté.', 'error');
+        return;
+    }
+    if (saved.buffer) {
+        updateTemplateState(saved.buffer, saved.name, type, saved.hash);
+        uiPersistBanner(null);
+        return;
+    }
+    await loadLegacyTemplate(options, saved, type);
 }
 
-// Envoie le fichier à Grist (method POST)
-async function uploadAttachmentToGrist(file) {
-    const tokenInfo = await grist.docApi.getAccessToken({
-        readOnly: false
-    });
-
-    const formData = new FormData();
-    formData.set('upload', file, file.name);
-    const response = await fetch(`${tokenInfo.baseUrl}/attachments?auth=${tokenInfo.token}`, {
-        method: 'POST',
-        body: formData,
-        headers: {
-            'X-Requested-With': 'XMLHttpRequest'
-        }
-    });
-    if (!response.ok) {
-        throw new Error('Echec Upload');
+// Ancien format : le modèle était une pièce jointe que Grist finit par
+// supprimer. Il est intégré aux options dès qu'un éditeur ouvre le widget ;
+// pour un lecteur, il est chargé une fois par session.
+let legacyLoaded = null;
+async function loadLegacyTemplate(options, saved, type) {
+    legacyLoaded = saved.legacyId;
+    let buffer;
+    try {
+        uiToast("Récupération du modèle...", "normal");
+        buffer = await downloadAttachmentFromGrist(saved.legacyId);
+    } catch (e) {
+        console.warn("Erreur chargement", e);
+        uiToast(`Le modèle « ${saved.name} » n'est plus disponible dans Grist (pièce jointe supprimée ou inaccessible) : chargez-le à nouveau.`, "error");
+        uiOpenModal();
+        return;
     }
-    const ids = await response.json();
-    return ids[0];
+    const upgraded = await templateOptions(options, buffer, saved.name);
+    updateTemplateState(buffer, saved.name, type, upgraded.templateHash);
+    uiToast("Modèle chargé : " + saved.name, "success");
+    if (!isReadonly()) await persistOptions(upgraded, { fallback: false });
+}
+
+// Écriture directe impossible : le bandeau rappelle de cliquer sur
+// « Enregistrer » tant que le modèle n'est pas dans le document.
+let pendingWatch = null;
+function watchPendingTemplate(hash) {
+    uiPersistBanner("Modèle pas encore enregistré dans le document : cliquez sur « Enregistrer » (Save) en haut du widget, sinon il sera perdu au prochain chargement.");
+    clearInterval(pendingWatch);
+    pendingWatch = setInterval(async () => {
+        if (hash !== state.templateHash) return clearInterval(pendingWatch);
+        if (await isTemplateSaved(hash).catch(() => false)) {
+            clearInterval(pendingWatch);
+            uiPersistBanner(null);
+            uiToast("Modèle enregistré dans le document", "success");
+        }
+    }, 3000);
 }
 
 // Récupère le fichier de Grist (method GET)
@@ -295,10 +310,11 @@ function readFileAsBuffer(file) {
     });
 }
 
-function updateTemplateState(buffer, name, type) {
+function updateTemplateState(buffer, name, type, hash = null) {
     state.templateBuffer = buffer;
     state.templateType = type;
     state.templateName = name;
+    state.templateHash = hash;
 
     uiSetTemplate(name);
     updateActionsState();

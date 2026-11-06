@@ -186,3 +186,12 @@ pièces jointes) avec un canvas simulé qui enregistre ce qui est dessiné.
 Vérification visuelle faite avec Chromium (canvas réel), l'aperçu
 docx-preview du widget et LibreOffice. LibreOffice ignore le décalage
 vertical des images (`w:position`) : les pilules y paraissent un peu hautes.
+
+## Modèle persistant
+
+`upload.test.cjs` vérifie, dans un document Grist simulé, que le modèle est
+écrit dans les options de la section du widget (sans le bouton « Enregistrer »
+de Grist), que deux widgets d'une même table sont départagés, et que l'ancien
+format (pièce jointe) est repris. Les scénarios contre un vrai Grist sont dans
+`grist-docker/`.
+

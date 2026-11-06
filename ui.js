@@ -112,6 +112,11 @@ function uiSetTemplate(name) {
     uiRender();
 }
 
+function uiPersistBanner(text) {
+    $('persistBanner').textContent = text || '';
+    $('persistBanner').hidden = !text;
+}
+
 function uiOpenModal() {
     uiState.showModal = true;
     uiRender();

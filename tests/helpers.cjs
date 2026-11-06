@@ -5,11 +5,11 @@ const { DOMParser, XMLSerializer } = require('@xmldom/xmldom');
 
 function loadApp(extra = {}) {
     const app = vm.createContext({
-        Blob, Uint8Array, ArrayBuffer, TextEncoder, TextDecoder, DOMParser, XMLSerializer,
+        Blob, Uint8Array, ArrayBuffer, TextEncoder, TextDecoder, DOMParser, XMLSerializer, URL, atob, btoa, crypto,
         console: { log() {}, warn() {}, error() {} }, ...extra,
     });
     app.window = app;
-    for (const file of ['inc/pizzip.js', 'inc/docxtemplater.js', 'merge-utils.js', 'relations-tools.js', 'render-tools.js', 'docx-tools.js']) {
+    for (const file of ['inc/pizzip.js', 'inc/docxtemplater.js', 'merge-utils.js', 'relations-tools.js', 'render-tools.js', 'docx-tools.js', 'template-store.js']) {
         vm.runInContext(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), app, { filename: file });
     }
     return app;

@@ -10,7 +10,7 @@ function controller() {
     const app = loadApp({
         grist: { ready(value) { ready = value; },
             onRecord(fn, options) { onRecord = fn; recordOptions = options; },
-            onRecords(fn, options) { onRecords = fn; recordsOptions = options; } },
+            onRecords(fn, options) { onRecords = fn; recordsOptions = options; }, onOptions() {} },
         initUi() {}, setTimeout() {}, uiEnableActions() {},
         uiToast: (...args) => messages.push(args), saveAs: (blob, name) => saved.push(name),
         JSZip: class { file(name) { files.push(name); } async generateAsync() { return new Blob(); } },
