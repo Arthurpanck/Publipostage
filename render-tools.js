@@ -3,7 +3,8 @@
  * Version : 1.0
  * Mise en forme des valeurs selon le type de la colonne Grist (DOCX) :
  *   - Booléen : case à cocher ☑ / ☐ suivie du nom de la colonne, automatique.
- *   - Choix, Choix multiples : tag teinté en gras, couleur de l'option Grist.
+ *   - Choix, Choix multiples : tag teinté en semi-gras, couleur de l'option
+ *     Grist, police et taille de la balise ; retour à la ligne si trop long.
  *   - Référence, Référence multiple : tag gris, valeur affichée de la fiche.
  *   - {Etape|etapes} : progression dans l'ordre des options du Choix.
  *   - {Actuel|barre:Objectif} ou {Actuel|barre:Objectif:Pourcentage} : barre
@@ -405,6 +406,48 @@ function fontPx(rPr) {
     return (m ? +m[1] / 2 : 11) * 96 / 72;
 }
 
+// Police réellement appliquée à une balise, résolue comme Word : valeurs par
+// défaut du document, style de paragraphe, style de caractère, puis mise en
+// forme directe. Polices du thème (« Corps », « Titres ») lues dans le thème.
+function fontResolver(zip) {
+    const read = name => (zip.file(name) ? zip.file(name).asText() : '');
+    const styles = read('word/styles.xml'), theme = read('word/theme/theme1.xml');
+    const themeFont = kind => (new RegExp(`<a:${kind}Font>\\s*<a:latin typeface="([^"]*)"`).exec(theme) || [])[1];
+    const fonts = { minor: themeFont('minor'), major: themeFont('major') };
+    const props = (rPr) => {
+        const out = {};
+        const sz = /<w:sz w:val="(\d+)"/.exec(rPr || ''), f = /<w:rFonts\b[^>]*\/>/.exec(rPr || '');
+        if (sz) out.px = +sz[1] / 2 * 96 / 72;
+        if (f) {
+            const ascii = /w:ascii="([^"]+)"/.exec(f[0]), themed = /w:asciiTheme="([^"]+)"/.exec(f[0]);
+            if (ascii) out.family = ascii[1];
+            else if (themed) out.family = fonts[/major/i.test(themed[1]) ? 'major' : 'minor'];
+        }
+        return out;
+    };
+    const byId = new Map();
+    let defaultParagraph = null;
+    for (const m of styles.matchAll(/<w:style\b([^>]*)>([\s\S]*?)<\/w:style>/g)) {
+        const id = (/w:styleId="([^"]+)"/.exec(m[1]) || [])[1];
+        if (!id) continue;
+        const rPr = (/<w:rPr>([\s\S]*?)<\/w:rPr>/.exec(m[2]) || [])[1];
+        byId.set(id, { basedOn: (/<w:basedOn w:val="([^"]+)"/.exec(m[2]) || [])[1], props: props(rPr) });
+        if (/w:type="paragraph"/.test(m[1]) && /w:default="(?:1|true)"/.test(m[1])) defaultParagraph = id;
+    }
+    const chain = (id, seen = new Set()) => {
+        const st = id && byId.get(id);
+        if (!st || seen.has(id)) return {};
+        seen.add(id);
+        return { ...chain(st.basedOn, seen), ...st.props };
+    };
+    const defaults = props((/<w:rPrDefault>\s*<w:rPr>([\s\S]*?)<\/w:rPr>/.exec(styles) || [])[1]);
+    return (pStyle, rPr) => {
+        const rStyle = (/<w:rStyle w:val="([^"]+)"/.exec(rPr || '') || [])[1];
+        const f = { px: 11 * 96 / 72, family: fonts.minor, ...defaults, ...chain(pStyle || defaultParagraph), ...chain(rStyle), ...props(rPr) };
+        return { px: f.px, family: f.family ? `"${f.family.replace(/"/g, '')}", ${SANS}` : SANS };
+    };
+}
+
 function roundRect(g, x, y, w, h, r) {
     r = Math.min(r, h / 2, w / 2);
     g.beginPath();
@@ -415,18 +458,41 @@ function roundRect(g, x, y, w, h, r) {
 }
 const css = hex => '#' + hex;
 
-// Étiquette en pilule : police 600 13 px, marges 5 × 11 px, fond et texte teintés
-function drawTag(draw, text, style, px) {
-    const k = px / BODY_PX, fs = 13 * k;
-    const font = `600 ${fs}px ${SANS}`;
-    const padX = 11 * k, padY = 5 * k, h = fs + 2 * padY;
-    const w = draw.measure(font, text) + 2 * padX;
+// Coupe un texte en lignes d'au plus maxW px (mots, puis caractères si un mot dépasse)
+function wrapText(draw, font, text, maxW) {
+    const lines = [];
+    let line = '';
+    for (const word of String(text).split(/\s+/).filter(Boolean)) {
+        const next = line ? line + ' ' + word : word;
+        if (draw.measure(font, next) <= maxW || !line) line = next; else { lines.push(line); line = word; }
+        while (draw.measure(font, line) > maxW && line.length > 1) {
+            let cut = line.length - 1;
+            while (cut > 1 && draw.measure(font, line.slice(0, cut)) > maxW) cut--;
+            lines.push(line.slice(0, cut)); line = line.slice(cut);
+        }
+    }
+    if (line) lines.push(line);
+    return lines.length ? lines : [''];
+}
+
+// Étiquette en pilule : police et taille de la balise en semi-gras, marges
+// 0,3 × 0,75 em, fond et texte teintés. Trop large pour la place disponible
+// (page ou cellule), elle passe sur plusieurs lignes.
+function drawTag(draw, text, style, font, maxW = Infinity) {
+    const fs = font.px, css600 = `600 ${fs}px ${font.family}`;
+    const padX = 0.75 * fs, padY = 0.3 * fs, lineH = 1.25 * fs;
+    const lines = wrapText(draw, css600, text, Math.max(fs, maxW - 2 * padX));
+    const w = Math.max(...lines.map(l => draw.measure(css600, l))) + 2 * padX;
+    const h = lines.length * lineH + 2 * padY;
     const { bg, fg } = tagColors(style && style.fill);
-    return draw.paint(w, h, g => {
-        roundRect(g, 0, 0, w, h, h / 2); g.fillStyle = css(bg); g.fill();
-        g.font = font; g.fillStyle = css(fg); g.textBaseline = 'middle';
-        g.fillText(text, padX, h / 2 + fs * 0.04);
+    const img = draw.paint(w, h, g => {
+        roundRect(g, 0, 0, w, h, lines.length > 1 ? lineH / 2 + padY : h / 2); g.fillStyle = css(bg); g.fill();
+        g.font = css600; g.fillStyle = css(fg); g.textBaseline = 'middle';
+        lines.forEach((l, i) => g.fillText(l, padX, padY + lineH * (i + 0.5) + fs * 0.04));
     });
+    // Ligne de base de la première ligne alignée sur celle du texte
+    img.drop = h - (padY + lineH / 2 + 0.35 * fs);
+    return img;
 }
 
 // Case carrée fine, coche tracée (comme ☑ / ☐)
@@ -519,8 +585,9 @@ const NOT_ON_IMAGES = { 'w:shd': null, 'w:highlight': null, 'w:u': null, 'w:bdr'
 // Image en ligne, centrée sur le texte (abaissée avec w:position)
 function imageRun(rPr, env, img, alt) {
     const rel = env.media.add({ key: img.data, data: img.data, ext: 'png' });
-    const fontPt = fontPx(rPr) * 0.75, hPt = img.h * 0.75;
-    const lower = Math.max(0, Math.round((hPt / 2 - 0.33 * fontPt) * 2));
+    const px = env.font ? env.font.px : fontPx(rPr);
+    const drop = img.drop !== undefined ? img.drop : img.h / 2 - 0.33 * px;
+    const lower = Math.max(0, Math.round(drop * 0.75 * 2));
     const props = mergeRPr(rPr, { ...NOT_ON_IMAGES, 'w:position': lower ? `<w:position w:val="-${lower}"/>` : null });
     return `<w:r>${props}${drawingXml(rel, img, alt)}</w:r>`;
 }
@@ -540,13 +607,13 @@ function drawingXml(rel, img, alt) {
 }
 
 function tagImages(rPr, env, items) {
-    const px = fontPx(rPr);
-    return items.map(item => imageRun(rPr, env, drawTag(env.draw, item.text, item.style, px), item.text))
+    const font = env.font || { px: fontPx(rPr), family: SANS };
+    return items.map(item => imageRun(rPr, env, drawTag(env.draw, item.text, item.style, font, env.width()), item.text))
         .join(runXml(rPr, {}, ' '));
 }
 
 function checkboxImage(rPr, env, checked) {
-    return imageRun(rPr, env, drawCheckbox(env.draw, checked, fontPx(rPr)), checked ? 'Case cochée' : 'Case non cochée');
+    return imageRun(rPr, env, drawCheckbox(env.draw, checked, env.font ? env.font.px : fontPx(rPr)), checked ? 'Case cochée' : 'Case non cochée');
 }
 
 function barImage(rPr, env, actual, goal, pct, info) {
@@ -556,7 +623,7 @@ function barImage(rPr, env, actual, goal, pct, info) {
     if (!isFinite(fraction)) fraction = 0;
     const pctText = pct ? formatNumber(fraction, { opts: { numMode: 'percent', maxDecimals: (pct.spec && pct.spec.opts && pct.spec.opts.maxDecimals) || 0 } }, info) : null;
     const text = formatNumber(actual.value, actual.spec, info), goalText = formatNumber(goal.value, goal.spec, info);
-    const img = drawBar(env.draw, text, fraction, pctText, goalText, fontPx(rPr), env.width());
+    const img = drawBar(env.draw, text, fraction, pctText, goalText, env.font ? env.font.px : fontPx(rPr), env.width());
     return imageRun(rPr, env, img, `${pctText ? pctText + ' ' : ''}${text} sur ${goalText}`);
 }
 
@@ -700,6 +767,14 @@ function textWidthPx(zip) {
     const twips = pg ? +pg[1] - (left ? +left[1] : 1134) - (right ? +right[1] : 1134) : 9638;
     return Math.max(240, twips / 15);
 }
+// Style du paragraphe qui contient la position
+function paragraphStyle(xml, offset) {
+    const start = Math.max(xml.lastIndexOf('<w:p>', offset), xml.lastIndexOf('<w:p ', offset));
+    if (start < 0) return null;
+    const m = /<w:pStyle w:val="([^"]+)"/.exec(xml.slice(start, offset));
+    return m ? m[1] : null;
+}
+
 function cellWidthPx(xml, offset, fallback) {
     const open = Math.max(xml.lastIndexOf('<w:tc>', offset), xml.lastIndexOf('<w:tc ', offset));
     if (open < 0 || xml.lastIndexOf('</w:tc>', offset) > open) return fallback;
@@ -720,7 +795,7 @@ function applyRenders(zip, registry) {
     for (const file of docxTextFiles(zip)) {
         const xml = file.asText();
         if (xml.indexOf(MARK_OPEN) < 0) continue;
-        const env = { draw, media: media && media.forPart(file.name), width: () => pageWidth };
+        const env = { draw, media: media && media.forPart(file.name), width: () => pageWidth, fontOf: draw ? fontResolver(zip) : null };
         zip.file(file.name, withTextBoxes(xml, part => replaceRuns(replaceBlocks(part, registry, env), registry, env)));
     }
     if (media) media.flush();
@@ -763,7 +838,7 @@ function replaceRuns(xml, registry, env) {
                 if (before) pending += `<w:t xml:space="preserve">${before}</w:t>`;
                 flush();
                 const render = registry[+m[1]];
-                const local = env.draw ? { ...env, width: () => cellWidthPx(xml, offset, env.width()) } : env;
+                const local = env.draw ? { ...env, width: () => cellWidthPx(xml, offset, env.width()), font: env.fontOf(paragraphStyle(xml, offset), rPr) } : env;
                 out += !render ? '' : env.draw ? render.inline(rPr, local) : (render.raw ? runXml(rPr, {}, render.raw) : '');
                 last = m.index + m[0].length;
             }

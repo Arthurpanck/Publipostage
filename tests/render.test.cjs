@@ -18,7 +18,7 @@ function fakeDocument(drawings) {
                     if (k === 'fillText') return (s) => ops.push(`texte:${s}`);
                     return () => {};
                 },
-                set: (t, k, v) => { t[k] = v; if (/Style$/.test(k)) ops.push(`${k}:${v}`); return true; },
+                set: (t, k, v) => { t[k] = v; if (/Style$|^font$/.test(k)) ops.push(`${k}:${v}`); return true; },
             });
             return {
                 width: 0, height: 0, getContext: () => ctx,
@@ -264,4 +264,38 @@ test('références reçues sous leur valeur affichée : étiquettes et fiches li
 test('colonne du même nom que la table liée, reçue sous sa valeur affichée', async () => {
     const { xml } = await generate(para('{Personnes}') + para('{Personnes.Nom}'), AS_GRIST_SENDS);
     assert.deepEqual(alts(xml), ['Julien Petit', 'Inès Garnier']);
+});
+
+// Modèle avec styles.xml et thème, comme un vrai document Word
+async function generateStyled(body, record = RECORDS[0]) {
+    const drawings = [];
+    const app = loadApp({ grist: gristMock(), atob, fetch: fetchMock(), document: fakeDocument(drawings) });
+    const zip = new app.PizZip(template(app, body));
+    zip.file('word/styles.xml', `<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+        <w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:asciiTheme="minorHAnsi" w:hAnsiTheme="minorHAnsi"/><w:sz w:val="22"/></w:rPr></w:rPrDefault></w:docDefaults>
+        <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+        <w:style w:type="paragraph" w:styleId="Titre"><w:basedOn w:val="Normal"/><w:rPr><w:rFonts w:ascii="Georgia" w:hAnsi="Georgia"/><w:sz w:val="36"/></w:rPr></w:style>
+        <w:style w:type="character" w:styleId="Petit"><w:rPr><w:sz w:val="16"/></w:rPr></w:style></w:styles>`);
+    zip.file('word/theme/theme1.xml', '<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:themeElements><a:fontScheme><a:majorFont><a:latin typeface="Aptos Display"/></a:majorFont><a:minorFont><a:latin typeface="Aptos"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>');
+    Object.assign(app, { __rec: record, __buffer: zip.generate({ type: 'uint8array' }), __batch: { cache: new Map(), viewRows: RECORDS, unknownTags: new Set(), notes: new Set() } });
+    const blob = await vm.runInContext('(async () => generateDocxBlob(rowData(__rec), __buffer, __batch.unknownTags, await loadRenderInfo(__batch)))()', app);
+    return { xml: new app.PizZip(await blob.arrayBuffer()).file('word/document.xml').asText(), drawings };
+}
+const fontOf = (drawings, text) => drawn(drawings, text).find(op => op.startsWith('font:600'));
+
+test('étiquette : police et taille de la balise (thème, style de paragraphe, style de caractère)', async () => {
+    const body = para('{Statut}')
+        + '<w:p><w:pPr><w:pStyle w:val="Titre"/></w:pPr>' + run('{Competences}') + '</w:p>'
+        + '<w:p><w:r><w:rPr><w:rStyle w:val="Petit"/></w:rPr><w:t>{Equipe}</w:t></w:r></w:p>';
+    const { drawings } = await generateStyled(body);
+    assert.match(fontOf(drawings, 'CDI'), /^font:600 14\.66\d*px "Aptos", /); // défauts : thème « Corps », 11 pt
+    assert.match(fontOf(drawings, 'Sourcing'), /^font:600 24px "Georgia", /); // style de paragraphe : 18 pt
+    assert.match(fontOf(drawings, 'Talents'), /^font:600 10\.66\d*px "Aptos", /); // style de caractère : 8 pt
+});
+
+test('étiquette trop large pour sa cellule : passe sur plusieurs lignes', async () => {
+    const cell = '<w:tc><w:tcPr><w:tcW w:w="1500" w:type="dxa"/></w:tcPr>' + para('{Statut}') + '</w:tc>';
+    const { drawings } = await generate(`<w:tbl><w:tr>${cell}</w:tr></w:tbl>`, RECORDS[2]); // « Période d'essai »
+    const ops = drawings.find(o => o.some(op => op.startsWith('texte:Période')));
+    assert.deepEqual(ops.filter(op => op.startsWith('texte:')), ['texte:Période', "texte:d'essai"]);
 });
