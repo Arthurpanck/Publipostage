@@ -156,6 +156,9 @@ async function savedOptionsOf(id) {
  * Enregistre les options dans le document.
  *  - 'saved'    : écrites et relues dans le document ;
  *  - 'readonly' : utilisateur en lecture seule, rien n'est écrit ;
+ *  - 'owners'   : le document réserve la modification de sa structure aux
+ *                 propriétaires (le bouton « Enregistrer » de Grist échouerait
+ *                 aussi) ; rien n'est écrit ;
  *  - 'pending'  : écriture directe impossible ; les options sont proposées à
  *                 Grist, qui affiche son bouton « Enregistrer » ;
  *  - 'failed'   : écriture directe impossible et { fallback: false }.
@@ -168,6 +171,7 @@ async function persistOptions(options, { fallback = true } = {}) {
         if (sameOptions(await savedOptionsOf(id), options)) return 'saved';
     } catch (e) {
         console.warn('Enregistrement direct impossible', e);
+        if (/structure access rules/i.test(String(e && e.message))) return 'owners';
     }
     if (!fallback) return 'failed';
     await grist.setOptions(options);

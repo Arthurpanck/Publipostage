@@ -94,6 +94,8 @@ async function handleTemplateUpload(file) {
             uiToast("Modèle enregistré dans le document", "success");
         } else if (status === 'readonly') {
             uiToast("Lecture seule : modèle utilisé pour cette session uniquement", "error");
+        } else if (status === 'owners') {
+            uiPersistBanner("Modèle utilisé pour cette session seulement : ce document réserve la modification de sa structure aux propriétaires. Demandez à un propriétaire de charger le modèle, ou d'autoriser les éditeurs à modifier la structure (règles d'accès).");
         } else {
             watchPendingTemplate(options.templateHash);
         }

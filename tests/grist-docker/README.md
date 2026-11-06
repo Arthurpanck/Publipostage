@@ -35,6 +35,13 @@ et `viewer@test.fr` (lecteur).
 - `grist.setOptions` n'enregistre rien : il allume le bouton « Enregistrer »
   de Grist, et les options sont perdues au rechargement si personne ne clique.
 
+- Si la case « Autoriser les éditeurs à modifier la structure » est décochée
+  (règle `user.Access != OWNER` → `-S` sur toutes les tables), un éditeur ne
+  peut modifier aucune option de widget, pas même avec le bouton
+  « Enregistrer » de Grist : seul un propriétaire peut attacher un modèle.
+  Le widget le dit à l'éditeur et reprend l'ancien format quand un
+  propriétaire l'ouvre.
+
 D'où les choix du widget (`template-store.js`) : le modèle est rangé dans les
 options du widget, et le widget les écrit lui-même dans le document. La
 purge `removeUnused?expiredonly=0` simule les 7 jours.

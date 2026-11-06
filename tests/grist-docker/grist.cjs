@@ -87,7 +87,7 @@ async function openDoc(s, d) {
 
 async function widgetFrame(s, n = 0) {
   for (let i = 0; i < 60; i++) {
-    const frame = s.page.frames().filter(f => /127\.0\.0\.1:\d+\/index\.html/.test(f.url()))[n];
+    const frame = s.page.frames().filter(f => /127\.0\.0\.1:\d+\/(.*\/)?index\.html/.test(f.url()))[n];
     if (frame && await frame.evaluate(() => typeof state !== 'undefined').catch(() => false)) return frame;
     await sleep(500);
   }

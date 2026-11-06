@@ -68,12 +68,25 @@ const SCENARIOS = {
       ['AddRecord', '_grist_ACLRules', null, { resource: -1, aclFormula: "user.Access == 'viewers'", permissionsText: '-R', memo: '' }]]);
     const r = await G.check(VIEWER, d); return [is(r, A), r.name];
   },
-  'Règle d\'accès : éditeurs privés de « modifier la structure »': async url => {
+  'Structure réservée aux propriétaires : l\'éditeur est prévenu, le propriétaire enregistre': async url => {
     const d = await G.createDoc(url);
-    await G.apply(d, [['AddRecord', '_grist_ACLResources', -1, { tableId: '*SPECIAL', colIds: 'SchemaEdit' }],
-      ['AddRecord', '_grist_ACLRules', null, { resource: -1, aclFormula: "user.Access == 'editors'", permissionsText: '-S', memo: '' }]]);
-    const up = await uploadAs(EDITOR, d, A);
-    const r = await G.check(VIEWER, d); return [is(r, A), `« ${up.toast} » · lecteur : ${r.name}`];
+    await G.apply(d, [['AddRecord', '_grist_ACLResources', -1, { tableId: '*', colIds: '*' }],
+      ['AddRecord', '_grist_ACLRules', null, { resource: -1, aclFormula: 'user.Access != OWNER', permissionsText: '-S', memo: '' }]]);
+    const ed = await uploadAs(EDITOR, d, A);
+    const [afterEditor] = await G.savedOptions(d);
+    await uploadAs(OWNER, d, B);
+    const r = await G.check(EDITOR, d);
+    return [/propriétaires/.test(ed.banner) && ed.saveButton === 0 && !afterEditor && is(r, B),
+      `éditeur : « ${ed.banner.slice(0, 70)}… » · bouton Enregistrer allumé : ${ed.saveButton} · propriétaire puis éditeur : ${r.name}`];
+  },
+  'Migration dans un document à structure réservée : faite à l\'ouverture par le propriétaire': async url => {
+    const d = await legacyDoc(url);
+    await G.apply(d, [['AddRecord', '_grist_ACLResources', -1, { tableId: '*', colIds: '*' }],
+      ['AddRecord', '_grist_ACLRules', null, { resource: -1, aclFormula: 'user.Access != OWNER', permissionsText: '-S', memo: '' }]]);
+    const ed = await G.check(EDITOR, d); const [still] = await G.savedOptions(d);
+    const ow = await G.check(OWNER, d); const [after] = await G.savedOptions(d);
+    return [is(ed, A) && !!still.templateId && is(ow, A) && !!after.templateData && !after.templateId,
+      `éditeur : ${ed.name} (options inchangées) · propriétaire : ${ow.name} → ${Object.keys(after).sort()}`];
   },
   'Purge des pièces jointes inutilisées (au-delà de 7 jours)': async url => {
     const d = await G.createDoc(url); await uploadAs(OWNER, d, A);

@@ -13,6 +13,7 @@ const section = (id, widgetOptions, { url = WIDGET, tableRef = 1 } = {}) =>
 // enregistrées vivent dans _grist_Views_section, et Grist renvoie au widget
 // (onOptions) celles de sa propre section quand elles changent.
 function controller({ sections = [section(7, null)], own = 7, readonly = false, denied = false } = {}) {
+    if (denied === true) denied = 'No write access';
     const events = [];
     const rows = new Map(sections.map(s => [s.id, { ...s }]));
     const widgetOptions = id => JSON.parse(JSON.parse(rows.get(id).options).customView).widgetOptions;
@@ -30,7 +31,7 @@ function controller({ sections = [section(7, null)], own = 7, readonly = false, 
                     return { id: list.map(r => r.id), tableRef: list.map(r => r.tableRef), parentKey: list.map(r => r.parentKey), options: list.map(r => r.options) };
                 },
                 applyUserActions: async actions => {
-                    if (denied) throw new Error('No write access');
+                    if (denied) throw new Error(denied);
                     for (const [, table, id, values] of actions) {
                         assert.equal(table, '_grist_Views_section');
                         rows.get(id).options = values.options;
@@ -128,6 +129,15 @@ test('écriture refusée : options proposées à Grist et bandeau « Enregistrer
     await app.handleTemplateUpload({ name: 'a.docx', buffer: docx(app) });
     assert.equal(events.includes('setOptions'), true);
     assert.match(events.find(e => e.bandeau).bandeau, /cliquez sur « Enregistrer »/);
+});
+
+test('structure réservée aux propriétaires : pas de bouton « Enregistrer » voué à l\'échec', async () => {
+    const { app, events, state, start } = controller({ denied: 'Blocked by table structure access rules' });
+    start();
+    await app.handleTemplateUpload({ name: 'a.docx', buffer: docx(app) });
+    assert.equal(state().templateName, 'a.docx');
+    assert.equal(events.includes('setOptions'), false);
+    assert.match(events.find(e => e.bandeau).bandeau, /réserve la modification de sa structure aux propriétaires/);
 });
 
 test('au chargement, le modèle intégré aux options est utilisé tel quel', async () => {
