@@ -299,3 +299,11 @@ test('étiquette trop large pour sa cellule : passe sur plusieurs lignes', async
     const ops = drawings.find(o => o.some(op => op.startsWith('texte:Période')));
     assert.deepEqual(ops.filter(op => op.startsWith('texte:')), ['texte:Période', "texte:d'essai"]);
 });
+
+test('étiquette dans une cellule plus étroite qu\'un mot : le mot est coupé', async () => {
+    const cell = '<w:tc><w:tcPr><w:tcW w:w="900" w:type="dxa"/></w:tcPr>' + para('{Statut}') + '</w:tc>';
+    const { drawings } = await generate(`<w:tbl><w:tr>${cell}</w:tr></w:tbl>`, RECORDS[2]); // « Période d'essai »
+    const lines = drawings.find(o => o.some(op => op.startsWith('texte:Pé'))).filter(op => op.startsWith('texte:')).map(op => op.slice(6));
+    assert.equal(lines.join(''), "Périoded'essai");
+    assert.ok(lines.length > 2 && lines.every(l => l.length <= 3), lines.join(' | '));
+});

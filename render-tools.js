@@ -639,7 +639,8 @@ function stepsInline(rPr, env, choices, current, fill) {
 
 // Seule dans son paragraphe : frise sur toute la largeur, dans le paragraphe d'origine
 function stepsImage(env, pPr, choices, current, fill) {
-    const img = drawSteps(env.draw, choices, current, fill, env.width());
+    // 24 px par étape au moins : les cercles ne se chevauchent pas dans une cellule étroite
+    const img = drawSteps(env.draw, choices, current, fill, Math.max(24 * choices.length, env.width()));
     const rel = env.media.add({ key: img.data, data: img.data, ext: 'png' });
     return `<w:p>${pPr}<w:r>${drawingXml(rel, img, stepsAlt(choices, current))}</w:r></w:p>`;
 }
@@ -780,7 +781,7 @@ function cellWidthPx(xml, offset, fallback) {
     if (open < 0 || xml.lastIndexOf('</w:tc>', offset) > open) return fallback;
     const tcW = /<w:tcW\b[^>]*\/>/.exec(xml.slice(open, offset));
     const m = tcW && /w:type="dxa"/.test(tcW[0]) && /w:w="(\d+)"/.exec(tcW[0]);
-    return m ? Math.max(120, (+m[1] - 216) / 15) : fallback * 0.5;
+    return m ? Math.max(16, (+m[1] - 216) / 15) : fallback * 0.5;
 }
 
 // ---------------------------------------------------------------------------
