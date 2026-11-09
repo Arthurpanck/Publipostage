@@ -178,7 +178,7 @@ async function dispatchGeneration(received, batch) {
         await loadAttachments(batch, data, renderInfo);
         return generateDocxBlob(data, state.templateBuffer, batch.unknownTags, renderInfo);
     } else if (state.templateType === 'pdf') {
-        return await generatePdfBlob(data, state.templateBuffer);
+        return await generatePdfBlob(data, state.templateBuffer, await loadRenderInfo(batch));
     }
 }
 

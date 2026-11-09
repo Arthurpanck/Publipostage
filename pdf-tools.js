@@ -5,8 +5,10 @@
  * Gestion des fichiers PDF
  */
 
-async function generatePdfBlob(data, buffer) {
+async function generatePdfBlob(data, buffer, renderInfo = null) {
     data = normalizeMergeData(data);
+    // Dates au format de la colonne Grist (voir render-tools.js)
+    const specs = (renderInfo && renderInfo.root) || {};
     const { PDFDocument } = PDFLib;
     const pdfDoc = await PDFDocument.load(buffer);
     const form = pdfDoc.getForm();
@@ -31,7 +33,8 @@ async function generatePdfBlob(data, buffer) {
     // Remplissage
     for (const [key, value] of Object.entries(data)) {
         const field = fieldMap[key];
-        const textValue = value === null || value === undefined ? '' : String(value);
+        const textValue = isDateSpec(specs[key]) ? formatDate(value, specs[key], renderInfo)
+            : value === null || value === undefined ? '' : String(value);
 
         if (field) {
             try {

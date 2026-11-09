@@ -56,10 +56,11 @@ async function loadRenderInfo(batch) {
                 fetchTableCached(batch.cache, '_grist_DocInfo').catch(() => null),
             ]);
             const settings = parseWidgetOptions(docInfo && docInfo.documentSettings && docInfo.documentSettings[0]);
-            return { cols, tables, locale: settings.locale || 'fr-FR', currency: settings.currency || 'EUR' };
+            const timezone = docInfo && docInfo.timezone ? docInfo.timezone[0] : null;
+            return { cols, tables, locale: settings.locale || 'fr-FR', currency: settings.currency || 'EUR', timezone };
         });
         const widgetTable = await cached(batch.cache, WIDGET_TABLE, () => grist.getSelectedTableId());
-        const info = { locale: meta.locale, currency: meta.currency, root: null, byKey: new Map() };
+        const info = { locale: meta.locale, currency: meta.currency, timezone: meta.timezone, root: null, byKey: new Map() };
         info.root = await tableSpec(batch, meta, widgetTable);
         for (const [key, tableId] of (batch.sources || new Map())) {
             info.byKey.set(key, await tableSpec(batch, meta, tableId));
@@ -101,10 +102,13 @@ async function refDisplay(batch, meta, tableId, visibleIndex) {
     const { cols } = meta;
     const tbl = await fetchTableCached(batch.cache, tableId);
     const visibleCol = visibleIndex === undefined ? null : cols.colId[visibleIndex];
+    // Colonne affichée de type date : même format que dans Grist
+    const dateSpec = visibleCol && { type: cols.type[visibleIndex], opts: parseWidgetOptions(cols.widgetOptions[visibleIndex]) };
     const map = new Map();
     tbl.id.forEach((id, i) => {
         const raw = visibleCol ? tbl[visibleCol][i] : id;
-        const text = Array.isArray(raw) ? raw.slice(raw[0] === 'L' ? 1 : 0).join(', ') : raw;
+        const text = isDateSpec(dateSpec) ? formatDate(raw, dateSpec, meta)
+            : Array.isArray(raw) ? raw.slice(raw[0] === 'L' ? 1 : 0).join(', ') : raw;
         map.set(id, { text: text == null ? '' : String(text), style: null });
     });
     return map;
@@ -167,6 +171,7 @@ function makeParser(ctx) {
                 if (value === undefined) return undefined;
                 if (part && part.module) return value; // boucles, conditions : valeur brute
                 const spec = scope[RENDER] && scope[RENDER][base];
+                if (format === null && isDateSpec(spec)) return formatDate(value, spec, ctx.info || {});
                 const lookup = (name) => lookupScopes(context, name);
                 const render = renderer(ctx, { value, spec, format, args, tag, lookup });
                 if (!render) return value;
@@ -344,6 +349,74 @@ const runXml = (rPr, overrides, text) =>
 const NBSP = ' ';
 
 // Formatage d'un nombre comme dans Grist (mode, devise, décimales)
+// ---------------------------------------------------------------------------
+// Dates : format de la colonne Grist (syntaxe moment.js, comme dans Grist),
+// fuseau du type DateTime:Fuseau, langue du document. Le widget reçoit une
+// Date pour sa ligne et des secondes pour les tables lues par fetchTable.
+// ---------------------------------------------------------------------------
+
+const isDateSpec = spec => !!spec && /^Date(?:Time)?(?::|$)/.test(spec.type);
+const DATE_TOKENS = /\[([^\]]*)\]|YYYY|YY|MMMM|MMM|MM|Mo|M|DDDD|DDD|Do|DD|D|dddd|ddd|dd|d|HH|H|hh|h|mm|m|ss|s|SSS|A|a|ZZ|Z/g;
+
+function formatDate(value, spec, info) {
+    const isDate = Object.prototype.toString.call(value) === '[object Date]';
+    const date = isDate ? value : typeof value === 'number' ? new Date(value * 1000) : null;
+    if (!date || isNaN(date)) return value == null ? '' : String(value);
+    const o = spec.opts || {};
+    const withTime = spec.type.startsWith('DateTime');
+    let zone = withTime ? (spec.type.split(':')[1] || info.timezone || 'UTC') : 'UTC';
+    const locale = info.locale || 'fr-FR';
+    let parts;
+    try {
+        parts = dateParts(date, zone, locale);
+    } catch (e) {
+        zone = 'UTC';
+        parts = dateParts(date, zone, locale);
+    }
+    const text = applyDateFormat(o.dateFormat || 'YYYY-MM-DD', parts, locale);
+    return withTime ? `${text} ${applyDateFormat(o.timeFormat || 'h:mma', parts, locale)}` : text;
+}
+
+function dateParts(date, timeZone, locale) {
+    const num = {};
+    new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: 'numeric', day: 'numeric',
+        hour: 'numeric', minute: 'numeric', second: 'numeric', hourCycle: 'h23' })
+        .formatToParts(date).forEach(p => { num[p.type] = +p.value; });
+    const name = (opts) => new Intl.DateTimeFormat(locale, { timeZone, ...opts }).format(date);
+    const wall = Date.UTC(num.year, num.month - 1, num.day, num.hour % 24, num.minute, num.second);
+    return {
+        ...num, hour: num.hour % 24, ms: date.getUTCMilliseconds(),
+        monthLong: name({ month: 'long' }), monthShort: name({ month: 'short' }),
+        dayLong: name({ weekday: 'long' }), dayShort: name({ weekday: 'short' }),
+        weekday: new Date(wall).getUTCDay(),
+        yearDay: Math.round((Date.UTC(num.year, num.month - 1, num.day) - Date.UTC(num.year, 0, 1)) / 86400000) + 1,
+        offset: Math.round((wall - (date.getTime() - date.getUTCMilliseconds())) / 60000),
+    };
+}
+
+function ordinal(n, locale) {
+    if (/^fr/i.test(locale)) return n === 1 ? '1er' : String(n);
+    if (/^en/i.test(locale)) return n + (['th', 'st', 'nd', 'rd'][(n % 100 >> 3 ^ 1 && n % 10) || 0] || 'th');
+    return n + '.';
+}
+
+function applyDateFormat(format, p, locale) {
+    const pad = (n, w = 2) => String(n).padStart(w, '0');
+    const h12 = p.hour % 12 || 12;
+    const sign = p.offset < 0 ? '-' : '+', off = Math.abs(p.offset);
+    const tokens = {
+        YYYY: () => String(p.year), YY: () => pad(p.year % 100),
+        MMMM: () => p.monthLong, MMM: () => p.monthShort, MM: () => pad(p.month), Mo: () => ordinal(p.month, locale), M: () => String(p.month),
+        DDDD: () => pad(p.yearDay, 3), DDD: () => String(p.yearDay), Do: () => ordinal(p.day, locale), DD: () => pad(p.day), D: () => String(p.day),
+        dddd: () => p.dayLong, ddd: () => p.dayShort, dd: () => p.dayShort.slice(0, 2), d: () => String(p.weekday),
+        HH: () => pad(p.hour), H: () => String(p.hour), hh: () => pad(h12), h: () => String(h12),
+        mm: () => pad(p.minute), m: () => String(p.minute), ss: () => pad(p.second), s: () => String(p.second), SSS: () => pad(p.ms, 3),
+        A: () => (p.hour < 12 ? 'AM' : 'PM'), a: () => (p.hour < 12 ? 'am' : 'pm'),
+        Z: () => `${sign}${pad(Math.floor(off / 60))}:${pad(off % 60)}`, ZZ: () => `${sign}${pad(Math.floor(off / 60))}${pad(off % 60)}`,
+    };
+    return format.replace(DATE_TOKENS, (token, literal) => (literal !== undefined ? literal : tokens[token]()));
+}
+
 function formatNumber(value, spec, info) {
     if (typeof value !== 'number' || !isFinite(value)) return value == null ? '' : String(value);
     const o = (spec && spec.opts) || {};
