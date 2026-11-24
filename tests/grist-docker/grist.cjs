@@ -116,7 +116,7 @@ async function upload(s, file, n = 0) {
   await f.setInputFiles('#templateFile', { name: file.name, mimeType: 'application/octet-stream', buffer: file.buffer });
   const t0 = Date.now();
   let st = await widgetState(f);
-  while (Date.now() - t0 < 20000 && !/enregistré|Lecture seule|Erreur|trop lourd|session seulement/.test(st.toast + st.banner)) { await sleep(300); st = await widgetState(f); }
+  while (Date.now() - t0 < 60000 && !/enregistré|Lecture seule|Erreur|trop lourd|session seulement/.test(st.toast + st.banner)) { await sleep(300); st = await widgetState(f); }
   return st;
 }
 

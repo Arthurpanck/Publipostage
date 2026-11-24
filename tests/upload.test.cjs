@@ -17,7 +17,7 @@ const tick = (ms = 30) => new Promise(r => setTimeout(r, ms));
 // d'accès. Grist renvoie au widget (onOptions) les options de sa propre
 // section quand elles changent. Une action refusée l'est en entier.
 function controller({ sections = [section(7, null)], own = 7, readonly = false, structure = true,
-    modeles = null, attachments = {}, rules = [] } = {}) {
+    modeles = null, attachments = {}, rules = [], uploadStatus = 200 } = {}) {
     const events = [];
     const rows = new Map(sections.map(s => [s.id, { ...s }]));
     const widgetOptions = id => JSON.parse(JSON.parse(rows.get(id).options).customView).widgetOptions;
@@ -30,6 +30,7 @@ function controller({ sections = [section(7, null)], own = 7, readonly = false, 
         assert.ok(m, url);
         if (init.method === 'POST') {
             assert.equal(readonly, false, 'un lecteur ne téléverse rien');
+            if (uploadStatus !== 200) return { ok: false, status: uploadStatus };
             const id = nextFile++;
             files.set(id, Buffer.from(await init.body.get('upload').arrayBuffer()));
             events.push(`téléversé:${id}`);
@@ -110,11 +111,23 @@ test('le format binaire .doc est refusé avec une consigne de conversion', async
     await app.handleTemplateUpload({ name: 'ancien.doc', buffer: new Uint8Array() });
     assert.match(events.at(-1).message, /Enregistrez le fichier en .docx/);
 });
-test('un modèle de plus de 8 Mo est refusé', async () => {
-    const { app, events } = controller();
-    await app.handleTemplateUpload({ name: 'lourd.docx', buffer: new Uint8Array(8 * 1024 * 1024 + 1) });
-    assert.deepEqual(writes(events), []);
-    assert.match(events.at(-1).message, /trop lourd/);
+test('pas de limite de taille côté widget : un modèle de 20 Mo est enregistré', async () => {
+    const { app, events, doc, fileOf, start } = controller();
+    start(); await tick();
+    const zip = new app.PizZip(docx(app));
+    zip.file('word/media/photo.bin', new Uint8Array(20 * 1024 * 1024).fill(7));
+    const buffer = zip.generate({ type: 'uint8array', compression: 'STORE' });
+    await app.handleTemplateUpload({ name: 'lourd.docx', buffer });
+    assert.equal(fileOf(doc.modeles[0]).length, buffer.length);
+    assert.deepEqual(toasts(events).at(-1), 'success:Modèle enregistré dans le document');
+});
+test('fichier refusé par le serveur Grist (trop lourd) : message clair, modèle pour la session', async () => {
+    const { app, events, state, start } = controller({ uploadStatus: 413 });
+    start(); await tick();
+    await app.handleTemplateUpload({ name: 'lourd.docx', buffer: docx(app) });
+    assert.match(toasts(events).at(-1), /^error:.*trop lourd pour ce serveur Grist/);
+    assert.match(banner(events), /session seulement/);
+    assert.equal(state().templateName, 'lourd.docx');
 });
 
 test('le modèle est rangé en pièce jointe dans une table sans page ; les options ne gardent que son nom', async () => {

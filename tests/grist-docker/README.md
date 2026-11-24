@@ -75,11 +75,13 @@ Version précédente (modèle en base64 dans les options) : scénarios ok, sauf
 pour un éditeur quand la structure est réservée aux propriétaires, mais
 ouverture du document très lente (ci-dessous).
 
-Version actuelle : tous les scénarios de `run.cjs` passent (25), dont un
+Version actuelle : tous les scénarios de `run.cjs` passent (26), dont un
 éditeur qui charge un modèle dans un document à structure réservée, une fois
 le widget ouvert par le propriétaire. Changement de comportement : une copie
 « comme modèle » (sans données) perd les modèles, le widget dit lequel
-recharger.
+recharger. Cinq widgets ont chacun leur modèle (trois sur la même page), et
+le widget ne limite plus la taille du modèle (20 Mo testés) : seule compte
+la limite des pièces jointes du serveur Grist.
 
 Vitesse, débit limité à 20 Mbit/s (Chromium), 10 widgets avec un modèle de
 2 Mo chacun :

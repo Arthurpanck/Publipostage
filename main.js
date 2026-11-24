@@ -79,10 +79,6 @@ async function handleTemplateUpload(file) {
 
     try {
         const buffer = await readFileAsBuffer(file);
-        if (buffer.byteLength > TEMPLATE_MAX_BYTES) {
-            uiToast(`Modèle trop lourd (${Math.ceil(buffer.byteLength / 1048576)} Mo) : 8 Mo au plus. Réduisez les images du document.`, "error");
-            return;
-        }
         // Valider avant de remplacer le modèle enregistré.
         if (type === 'docx') compileDocxTemplate(buffer);
         else await PDFLib.PDFDocument.load(buffer);

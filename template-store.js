@@ -23,7 +23,6 @@
  * pièce jointe non rangée (templateId).
  */
 
-const TEMPLATE_MAX_BYTES = 8 * 1024 * 1024;
 const TEMPLATE_TABLE = 'Publipostage_Modeles';
 const TEMPLATE_COLUMNS = { Widget: 'Int', Modele: 'Text', Empreinte: 'Text', Fichier: 'Attachments' };
 
@@ -84,7 +83,10 @@ async function uploadTemplateFile(buffer, name) {
     const response = await fetch(`${token.baseUrl}/attachments?auth=${token.token}`, {
         method: 'POST', body: form, headers: { 'X-Requested-With': 'XMLHttpRequest' },
     });
-    if (!response.ok) throw new Error(`Envoi du fichier refusé par Grist (${response.status})`);
+    if (response.status === 413) {
+        throw new Error(`fichier trop lourd pour ce serveur Grist (${Math.ceil(buffer.byteLength / 1048576)} Mo). Réduisez les images du document`);
+    }
+    if (!response.ok) throw new Error(`envoi du fichier refusé par Grist (${response.status})`);
     return (await response.json())[0];
 }
 

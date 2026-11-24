@@ -12,7 +12,7 @@ const docx = (name, text, extra) => {
 };
 const A = docx('modele-A.docx', 'Modèle A : {Nom} de {Ville}');
 const B = docx('modele-B.docx', 'Modèle B : {Nom}');
-const GROS = docx('modele-gros.docx', 'Gros modèle : {Nom}', require('node:crypto').randomBytes(5 * 1024 * 1024));
+const GROS = docx('modele-gros.docx', 'Gros modèle : {Nom}', require('node:crypto').randomBytes(20 * 1024 * 1024));
 
 const purge = d => G.api(OWNER, 'POST', `/api/docs/${d.doc}/attachments/removeUnused?expiredonly=0`);
 async function uploadAs(email, d, file, n = 0) {
@@ -144,6 +144,35 @@ const SCENARIOS = {
     const r1 = await G.check(EDITOR, d), r2 = await G.check(EDITOR, d2);
     return [is(r1, A) && is(r2, B), `page 1 : ${r1.name} · page 2 : ${r2.name}`];
   },
+  'Cinq widgets, cinq modèles différents (trois sur la même page, deux sur d\'autres pages)': async url => {
+    const d = await G.createDoc(url, { widgets: 3 });
+    const p2 = await G.addWidget(d, url, 0), p3 = await G.addWidget(d, url, 0);
+    const files = [1, 2, 3, 4, 5].map(i => docx(`modele-${i}.docx`, `Texte du modèle ${i} pour {Nom}`));
+    const s = await G.session(OWNER); await G.openDoc(s, d);
+    for (let i = 0; i < 3; i++) await G.upload(s, files[i], i);
+    await G.openDoc(s, p2); await G.upload(s, files[3]);
+    await G.openDoc(s, p3); await G.upload(s, files[4]);
+    await s.ctx.close();
+    // Nom du modèle et texte de l'aperçu de chaque widget, pour un éditeur puis un lecteur
+    const shown = async (v, n) => {
+      const st = await G.templateIn(v, n); const f = await G.widgetFrame(v, n);
+      for (let k = 0; k < 40 && !/Texte du modèle/.test(await f.evaluate(() => document.getElementById('preview-container').innerText)); k++) await G.sleep(250);
+      const text = await f.evaluate(() => document.getElementById('preview-container').innerText);
+      return `${st.name}:${(/modèle (\d)/.exec(text) || [])[1]}`;
+    };
+    const seen = [];
+    for (const email of [EDITOR, VIEWER]) {
+      const v = await G.session(email); await G.openDoc(v, d);
+      for (let i = 0; i < 3; i++) seen.push(await shown(v, i));
+      await G.openDoc(v, p2); seen.push(await shown(v, 0));
+      await G.openDoc(v, p3); seen.push(await shown(v, 0));
+      await v.ctx.close();
+    }
+    const rows = await templateRows(d);
+    const expected = [...files, ...files].map((f, i) => `${f.name}:${(i % 5) + 1}`);
+    return [JSON.stringify(seen) === JSON.stringify(expected) && rows.length === 5 && new Set(rows.map(r => r.Widget)).size === 5,
+      `${seen.slice(0, 5).join(' / ')} (éditeur, idem lecteur) · lignes de la table : ${rows.length}`];
+  },
   'Remplacement du modèle': async url => {
     const d = await G.createDoc(url); await uploadAs(OWNER, d, A); await uploadAs(OWNER, d, B);
     const r = await G.check(EDITOR, d); return [is(r, B), r.name];
@@ -165,7 +194,7 @@ const SCENARIOS = {
     await s.ctx.close();
     const r = await G.check(OWNER, d); return [is(r, A), r.name];
   },
-  'Gros modèle (5 Mo)': async url => {
+  'Gros modèle (20 Mo, pas de limite côté widget)': async url => {
     const d = await G.createDoc(url); const t0 = Date.now(); await uploadAs(OWNER, d, GROS);
     const r = await G.check(EDITOR, d); const [opts] = await G.savedOptions(d); const size = JSON.stringify(opts).length;
     return [is(r, GROS) && size < 500, `${r.name} · ${((Date.now() - t0) / 1000).toFixed(1)} s · options du widget : ${size} octets`];
