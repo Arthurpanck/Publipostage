@@ -1,20 +1,31 @@
 /**
  * MODÈLE PERSISTANT
  * Objet : garder le modèle attaché au widget, pour tous les utilisateurs et
- * dans le temps.
+ * dans le temps, sans alourdir l'ouverture du document.
  *
- * Le modèle est rangé dans les options du widget (en base64), pas en pièce
- * jointe. Une pièce jointe qu'aucune cellule ne référence est marquée
- * supprimée par Grist dans l'heure, puis effacée 7 jours plus tard ; elle est
- * refusée aux utilisateurs soumis à des règles d'accès et retirée des copies
- * « comme modèle ».
+ * Le modèle est une pièce jointe rangée dans la table Publipostage_Modeles
+ * (table de données brutes, sans page) : une ligne par widget, repérée par le
+ * numéro de sa section. Une pièce jointe rangée dans une cellule n'est pas
+ * purgée par Grist, et seul le widget affiché la télécharge.
  *
- * Le widget écrit lui-même ses options dans _grist_Views_section :
- * grist.setOptions ne fait qu'allumer le bouton « Enregistrer » de Grist, et
- * rien n'est conservé tant que personne ne clique dessus.
+ * Les options du widget ne gardent que le nom et l'empreinte du modèle : leur
+ * changement prévient les autres utilisateurs (grist.onOptions) et Ctrl+Z
+ * rétablit le modèle précédent. Le fichier lui-même n'y est plus : Grist
+ * envoie les options de tous les widgets à chaque ouverture du document.
+ *
+ * Écrire les options demande le droit de modifier la structure ; ranger le
+ * fichier dans la table demande seulement celui de modifier les données. Un
+ * éditeur d'un document qui réserve la structure aux propriétaires enregistre
+ * donc son modèle dans la table, dès qu'elle existe.
+ *
+ * Anciens formats repris (puis retirés des options par un utilisateur qui
+ * peut les écrire) : modèle en base64 dans les options (templateData) et
+ * pièce jointe non rangée (templateId).
  */
 
 const TEMPLATE_MAX_BYTES = 8 * 1024 * 1024;
+const TEMPLATE_TABLE = 'Publipostage_Modeles';
+const TEMPLATE_COLUMNS = { Widget: 'Int', Modele: 'Text', Empreinte: 'Text', Fichier: 'Attachments' };
 
 // Dernières options reçues de Grist (grist.onOptions) et attentes en cours
 let storeOptions = null;
@@ -35,16 +46,7 @@ function waitForOptions(test, timeoutMs) {
     });
 }
 
-/* ── Encodage ───────────────────────────────────────────────────── */
-
-function bufferToBase64(buffer) {
-    const bytes = new Uint8Array(buffer);
-    let out = '';
-    for (let i = 0; i < bytes.length; i += 0x8000) {
-        out += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
-    }
-    return btoa(out);
-}
+/* ── Fichier ────────────────────────────────────────────────────── */
 
 function base64ToBuffer(text) {
     const bin = atob(text);
@@ -58,25 +60,45 @@ async function templateHash(buffer) {
     return Array.from(new Uint8Array(digest).slice(0, 12), b => b.toString(16).padStart(2, '0')).join('');
 }
 
-// Options du widget pour un nouveau modèle (l'ancien templateId disparaît)
-async function templateOptions(previous, buffer, name) {
-    const { templateId, sondePublipostage, ...rest } = previous || {};
-    return { ...rest, templateName: name, templateHash: await templateHash(buffer), templateData: bufferToBase64(buffer) };
+// Options du widget pour un modèle : nom, empreinte et numéro du widget (qui
+// départage deux widgets de la même table, même après une duplication)
+function pointerOptions(previous, name, hash, widget) {
+    const { templateId, templateData, sondePublipostage, ...rest } = previous || {};
+    return { ...rest, templateName: name, templateHash: hash, templateWidget: widget };
 }
 
-// Modèle décrit par les options : intégré, ancienne pièce jointe, ou rien
-function templateFromOptions(options) {
+// Modèle d'un ancien format encore présent dans les options
+function legacyFromOptions(options) {
     if (!options || !options.templateName) return null;
-    if (options.templateData) {
-        return { name: options.templateName, hash: options.templateHash, buffer: base64ToBuffer(options.templateData) };
-    }
+    if (options.templateData) return { name: options.templateName, hash: options.templateHash, data: options.templateData };
     if (options.templateId) return { name: options.templateName, legacyId: options.templateId };
     return null;
+}
+
+const hasLegacy = options => !!options && !!(options.templateData || options.templateId);
+
+async function uploadTemplateFile(buffer, name) {
+    const token = await grist.docApi.getAccessToken({ readOnly: false });
+    const form = new FormData();
+    form.set('upload', new Blob([buffer]), name);
+    const response = await fetch(`${token.baseUrl}/attachments?auth=${token.token}`, {
+        method: 'POST', body: form, headers: { 'X-Requested-With': 'XMLHttpRequest' },
+    });
+    if (!response.ok) throw new Error(`Envoi du fichier refusé par Grist (${response.status})`);
+    return (await response.json())[0];
+}
+
+async function downloadTemplateFile(attachmentId) {
+    const token = await grist.docApi.getAccessToken({ readOnly: true });
+    const response = await fetch(`${token.baseUrl}/attachments/${attachmentId}/download?auth=${token.token}`);
+    if (!response.ok) throw new Error(`Pièce jointe ${attachmentId} : ${response.status}`);
+    return response.arrayBuffer();
 }
 
 /* ── Section du widget ──────────────────────────────────────────── */
 
 const isReadonly = () => new URL(location.href).searchParams.get('readonly') === 'true';
+const isStructureDenied = e => /structure access rules/i.test(String(e && e.message));
 
 function stableJson(value) {
     if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
@@ -116,22 +138,29 @@ async function candidateSections() {
     return ours.length ? ours : custom;
 }
 
-async function writeSection(id, widgetOptions) {
+// Action qui remplace les options enregistrées d'une section
+async function sectionAction(id, widgetOptions) {
     const sections = await grist.docApi.fetchTable('_grist_Views_section');
     const section = parseSection(sections, sections.id.indexOf(id));
     section.view.widgetOptions = widgetOptions;
     section.options.customView = JSON.stringify(section.view);
-    await grist.docApi.applyUserActions([['UpdateRecord', '_grist_Views_section', id, { options: JSON.stringify(section.options) }]]);
+    return ['UpdateRecord', '_grist_Views_section', id, { options: JSON.stringify(section.options) }];
+}
+
+async function writeSection(id, widgetOptions) {
+    await grist.docApi.applyUserActions([await sectionAction(id, widgetOptions)]);
 }
 
 // Retrouve la section du widget : ses options enregistrées sont celles que
 // Grist nous a transmises. Si plusieurs sections ont les mêmes (deux widgets
 // neufs sur la même table), on marque l'une puis l'autre et on regarde
-// laquelle Grist nous renvoie.
-async function ownSection() {
+// laquelle Grist nous renvoie : il faut pouvoir écrire les options, d'où
+// { probe: false } quand on se contente de lire.
+async function ownSection({ probe = true } = {}) {
     if (storeSection) return storeSection;
     const candidates = (await candidateSections()).filter(s => sameOptions(s.view.widgetOptions, storeOptions));
     if (candidates.length === 1) return (storeSection = candidates[0].id);
+    if (!probe || !candidates.length) return null;
     for (const section of candidates) {
         const mark = Math.random().toString(36).slice(2);
         const original = section.view.widgetOptions || null;
@@ -146,43 +175,186 @@ async function ownSection() {
     throw new Error('Section du widget introuvable');
 }
 
-async function savedOptionsOf(id) {
-    const sections = await grist.docApi.fetchTable('_grist_Views_section');
-    const i = sections.id.indexOf(id);
-    return i < 0 ? undefined : parseSection(sections, i).view.widgetOptions;
+/* ── Table des modèles ──────────────────────────────────────────── */
+
+// Colonnes existantes de la table des modèles (null si elle n'existe pas)
+async function templateTableColumns() {
+    const tables = await grist.docApi.fetchTable('_grist_Tables');
+    const i = tables.tableId.indexOf(TEMPLATE_TABLE);
+    if (i < 0) return null;
+    const cols = await grist.docApi.fetchTable('_grist_Tables_column');
+    return new Set(cols.colId.filter((_, k) => cols.parentId[k] === tables.id[i]));
+}
+
+// Actions qui créent la table (sans page) ou complètent ses colonnes
+function tableActions(columns) {
+    const actions = [];
+    if (!columns) {
+        // AddRawTable crée aussi les colonnes A, B et C
+        actions.push(['AddRawTable', TEMPLATE_TABLE]);
+        for (const col of ['A', 'B', 'C']) actions.push(['RemoveColumn', TEMPLATE_TABLE, col]);
+    }
+    for (const [colId, type] of Object.entries(TEMPLATE_COLUMNS)) {
+        if (!columns || !columns.has(colId)) actions.push(['AddColumn', TEMPLATE_TABLE, colId, { type, isFormula: false }]);
+    }
+    return actions;
+}
+
+// Lignes de la table des modèles : [{ rowId, widget, name, hash, attachmentId }]
+async function templateRows() {
+    let tbl;
+    try {
+        tbl = await grist.docApi.fetchTable(TEMPLATE_TABLE);
+    } catch (e) {
+        return []; // table absente (ou illisible)
+    }
+    const col = name => tbl[name] || [];
+    return tbl.id.map((rowId, i) => {
+        const files = col('Fichier')[i];
+        const ids = Array.isArray(files) ? files.filter(v => typeof v === 'number') : [];
+        return { rowId, widget: col('Widget')[i], name: col('Modele')[i], hash: col('Empreinte')[i], attachmentId: ids[ids.length - 1] };
+    }).filter(r => r.attachmentId && r.name);
+}
+
+// Ligne du widget : celle de sa section ; à défaut, celle qui porte
+// l'empreinte de ses options (widget dupliqué, section non départagée).
+function rowFor(rows, sectionId, options) {
+    const own = sectionId && rows.find(r => r.widget === sectionId);
+    if (own) return own;
+    const hash = options && options.templateHash;
+    return (hash && rows.find(r => r.hash === hash)) || null;
+}
+
+// Le document réserve-t-il la structure aux propriétaires ? Seul un
+// propriétaire voit les règles ; elles ne sont lues qu'à l'ouverture.
+async function structureReserved() {
+    try {
+        const rules = await grist.docApi.fetchTable('_grist_ACLRules');
+        return (rules.permissionsText || []).some(p => /-[A-Z]*S/.test(p || ''));
+    } catch (e) {
+        return false;
+    }
+}
+
+// Ouverture par un propriétaire d'un document qui réserve la structure : la
+// table est préparée, pour que les éditeurs puissent enregistrer leurs modèles.
+async function prepareTableForEditors() {
+    if (isReadonly() || await templateTableColumns() || !await structureReserved()) return;
+    try {
+        await grist.docApi.applyUserActions(tableActions(null));
+    } catch (e) {
+        console.warn('Table des modèles non créée', e);
+    }
 }
 
 /**
- * Enregistre les options dans le document.
- *  - 'saved'    : écrites et relues dans le document ;
+ * Enregistre le modèle du widget dans le document.
+ *  - 'saved'    : fichier rangé dans la table et options à jour ;
+ *  - 'row'      : fichier rangé dans la table ; options non modifiables
+ *                 (structure réservée aux propriétaires) ;
  *  - 'readonly' : utilisateur en lecture seule, rien n'est écrit ;
- *  - 'owners'   : le document réserve la modification de sa structure aux
- *                 propriétaires (le bouton « Enregistrer » de Grist échouerait
- *                 aussi) ; rien n'est écrit ;
- *  - 'pending'  : écriture directe impossible ; les options sont proposées à
- *                 Grist, qui affiche son bouton « Enregistrer » ;
- *  - 'failed'   : écriture directe impossible et { fallback: false }.
+ *  - 'owners'   : la table n'existe pas et seul un propriétaire peut la créer ;
+ *  - 'section'  : deux widgets de la même table, impossibles à départager sans
+ *                 écrire les options.
+ * Une autre erreur est levée.
  */
-async function persistOptions(options, { fallback = true } = {}) {
+async function storeTemplate({ name, hash, buffer }, { reuseRow = null } = {}) {
     if (isReadonly()) return 'readonly';
+    let sectionId;
     try {
-        const id = await ownSection();
-        await writeSection(id, options);
-        if (sameOptions(await savedOptionsOf(id), options)) return 'saved';
+        sectionId = await ownSection();
     } catch (e) {
-        console.warn('Enregistrement direct impossible', e);
-        if (/structure access rules/i.test(String(e && e.message))) return 'owners';
+        if (isStructureDenied(e)) return 'section';
+        throw e;
     }
-    if (!fallback) return 'failed';
-    await grist.setOptions(options);
-    return 'pending';
+    if (!sectionId) throw new Error('Section du widget introuvable');
+    const columns = await templateTableColumns();
+    const rows = await templateRows();
+    const row = reuseRow || rows.find(r => r.widget === sectionId);
+    const data = [];
+    if (!reuseRow) {
+        const attachmentId = await uploadTemplateFile(buffer, name);
+        const fields = { Widget: sectionId, Modele: name, Empreinte: hash, Fichier: ['L', attachmentId] };
+        data.push(...tableActions(columns));
+        data.push(row && row.widget === sectionId
+            ? ['UpdateRecord', TEMPLATE_TABLE, row.rowId, fields]
+            : ['AddRecord', TEMPLATE_TABLE, null, fields]);
+    } else if (reuseRow.widget !== sectionId) {
+        // Modèle hérité d'un autre widget (copie) : ligne propre à celui-ci
+        data.push(['AddRecord', TEMPLATE_TABLE, null, { Widget: sectionId, Modele: name, Empreinte: hash, Fichier: ['L', reuseRow.attachmentId] }]);
+    }
+    const pointer = await sectionAction(sectionId, pointerOptions(storeOptions, name, hash, sectionId));
+    try {
+        // Une seule action : un Ctrl+Z rétablit le fichier et les options
+        await grist.docApi.applyUserActions([...data, pointer]);
+        return 'saved';
+    } catch (e) {
+        if (!isStructureDenied(e)) throw e;
+    }
+    if (!columns || data.some(a => a[0] !== 'AddRecord' && a[0] !== 'UpdateRecord')) return 'owners';
+    if (data.length) await grist.docApi.applyUserActions(data);
+    return 'row';
 }
 
-// Un modèle en attente du bouton « Enregistrer » est-il désormais dans le document ?
-async function isTemplateSaved(hash) {
-    const sections = await grist.docApi.fetchTable('_grist_Views_section');
-    return sections.id.some((_, i) => {
-        const options = parseSection(sections, i).view.widgetOptions;
-        return !!options && options.templateHash === hash;
-    });
+/**
+ * Modèle à afficher, lu dans le document :
+ *  { name, hash, buffer }   modèle de la table, ou d'un ancien format ;
+ *  { name, missing: true }  les options citent un modèle introuvable (copie
+ *                           sans données, table supprimée…) ;
+ *  null                     aucun modèle.
+ * `skip(hash)` évite de retélécharger le modèle déjà chargé.
+ * Un utilisateur qui peut écrire les options retire l'ancien format.
+ */
+async function readTemplate(options, skip = () => false) {
+    const [sectionId, rows] = await Promise.all([
+        ownSection({ probe: false }).catch(() => null),
+        templateRows(),
+    ]);
+    const row = rowFor(rows, sectionId, options);
+    if (row) {
+        const buffer = skip(row.hash) ? null : await downloadTemplateFile(row.attachmentId);
+        const template = { name: row.name, hash: row.hash, buffer, row };
+        if (hasLegacy(options) || row.widget !== sectionId) migrate(template);
+        return template;
+    }
+    const legacy = legacyFromOptions(options);
+    if (legacy && legacy.data) {
+        const template = { name: legacy.name, hash: legacy.hash, buffer: base64ToBuffer(legacy.data) };
+        if (!template.hash) template.hash = await templateHash(template.buffer);
+        migrate(template);
+        return template;
+    }
+    if (legacy && legacy.legacyId) {
+        // Téléchargée une fois par session, malgré les notifications de Grist
+        if (!legacyCache || legacyCache.id !== legacy.legacyId) {
+            legacyCache = { id: legacy.legacyId, template: loadLegacyFile(legacy) };
+        }
+        const template = await legacyCache.template;
+        if (!template.missing) migrate(template);
+        return template;
+    }
+    if (options && options.templateName) return { name: options.templateName, missing: true };
+    return null;
+}
+
+let legacyCache = null;
+async function loadLegacyFile(legacy) {
+    try {
+        const buffer = await downloadTemplateFile(legacy.legacyId);
+        return { name: legacy.name, hash: await templateHash(buffer), buffer };
+    } catch (e) {
+        console.warn('Ancienne pièce jointe illisible', e);
+        return { name: legacy.name, missing: true };
+    }
+}
+
+// Reprise d'un ancien format, ou d'un modèle hérité : en arrière-plan, sans
+// message. Si les options ne peuvent pas être écrites, un propriétaire la
+// terminera en ouvrant le widget.
+let migrating = null;
+function migrate(template) {
+    if (isReadonly() || migrating === template.hash) return;
+    migrating = template.hash;
+    storeTemplate(template, { reuseRow: template.row || null })
+        .catch(e => console.warn('Reprise du modèle impossible', e));
 }

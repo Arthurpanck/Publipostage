@@ -6,64 +6,103 @@ const vm = require('node:vm');
 const { loadApp, template, para } = require('./helpers.cjs');
 
 const WIDGET = 'https://widget.test/publipostage/index.html';
+const BASE = 'https://grist.test/api/docs/doc1';
 const section = (id, widgetOptions, { url = WIDGET, tableRef = 1 } = {}) =>
     ({ id, tableRef, parentKey: 'custom', options: JSON.stringify({ customView: JSON.stringify({ mode: 'url', url, widgetOptions }) }) });
+const STRUCTURE = 'Blocked by table structure access rules';
+const tick = (ms = 30) => new Promise(r => setTimeout(r, ms));
 
-// Contrôleur réel (main.js) dans un document Grist simulé : les options
-// enregistrées vivent dans _grist_Views_section, et Grist renvoie au widget
-// (onOptions) celles de sa propre section quand elles changent.
-function controller({ sections = [section(7, null)], own = 7, readonly = false, denied = false } = {}) {
-    if (denied === true) denied = 'No write access';
+// Contrôleur réel (main.js) dans un document Grist simulé : sections de widget
+// (_grist_Views_section), table Publipostage_Modeles, pièces jointes et règles
+// d'accès. Grist renvoie au widget (onOptions) les options de sa propre
+// section quand elles changent. Une action refusée l'est en entier.
+function controller({ sections = [section(7, null)], own = 7, readonly = false, structure = true,
+    modeles = null, attachments = {}, rules = [] } = {}) {
     const events = [];
     const rows = new Map(sections.map(s => [s.id, { ...s }]));
     const widgetOptions = id => JSON.parse(JSON.parse(rows.get(id).options).customView).widgetOptions;
+    const files = new Map(Object.entries(attachments).map(([id, bytes]) => [+id, Buffer.from(bytes)]));
+    let nextFile = 100;
+    const doc = { modeles: modeles && modeles.map((r, i) => ({ id: i + 1, ...r })), columns: modeles ? ['Widget', 'Modele', 'Empreinte', 'Fichier'] : null, rawTable: false };
     let onOptions = () => {};
-    let unsaved = null;
+    const fetch = async (url, init = {}) => {
+        const m = /\/attachments(?:\/(\d+)\/download)?\?auth=/.exec(url);
+        assert.ok(m, url);
+        if (init.method === 'POST') {
+            assert.equal(readonly, false, 'un lecteur ne téléverse rien');
+            const id = nextFile++;
+            files.set(id, Buffer.from(await init.body.get('upload').arrayBuffer()));
+            events.push(`téléversé:${id}`);
+            return { ok: true, json: async () => [id] };
+        }
+        const bytes = files.get(+m[1]);
+        events.push(`téléchargé:${m[1]}`);
+        return bytes ? { ok: true, arrayBuffer: async () => new Uint8Array(bytes).buffer } : { ok: false, status: 404 };
+    };
     const app = loadApp({
-        location: new URL(`${WIDGET}?access=full&readonly=${readonly}`), setTimeout, clearInterval, setInterval: () => 0,
+        location: new URL(`${WIDGET}?access=full&readonly=${readonly}`), setTimeout, fetch, FormData, Blob,
         grist: { ready() {}, onRecord() {}, onRecords() {}, onOptions(fn) { onOptions = fn; },
-            getOptions: async () => unsaved || widgetOptions(own), setOptions: async value => { events.push('setOptions'); unsaved = value; },
+            getOptions: async () => widgetOptions(own),
             getSelectedTableId: async () => 'Donnees',
             docApi: {
+                getAccessToken: async () => ({ baseUrl: BASE, token: 'jeton' }),
                 fetchTable: async t => {
-                    if (t === '_grist_Tables') return { id: [1, 2], tableId: ['Donnees', 'Autre'] };
+                    if (t === '_grist_Tables') return { id: [1, 2, ...(doc.columns ? [3] : [])], tableId: ['Donnees', 'Autre', ...(doc.columns ? ['Publipostage_Modeles'] : [])] };
+                    if (t === '_grist_Tables_column') return { id: (doc.columns || []).map((_, i) => i + 1), parentId: (doc.columns || []).map(() => 3), colId: doc.columns || [] };
+                    if (t === '_grist_ACLRules') return { id: rules.map((_, i) => i + 1), permissionsText: rules };
+                    if (t === 'Publipostage_Modeles') {
+                        if (!doc.columns) throw new Error('Table not found "Publipostage_Modeles"');
+                        const col = c => doc.modeles.map(r => r[c] === undefined ? null : r[c]);
+                        return { id: col('id'), Widget: col('Widget'), Modele: col('Modele'), Empreinte: col('Empreinte'), Fichier: col('Fichier') };
+                    }
                     const list = [...rows.values()];
                     return { id: list.map(r => r.id), tableRef: list.map(r => r.tableRef), parentKey: list.map(r => r.parentKey), options: list.map(r => r.options) };
                 },
                 applyUserActions: async actions => {
-                    if (denied) throw new Error(denied);
-                    for (const [, table, id, values] of actions) {
-                        assert.equal(table, '_grist_Views_section');
-                        rows.get(id).options = values.options;
-                        events.push(`écrit:${id}`);
-                        if (id === own) setTimeout(() => onOptions(widgetOptions(own)), 5);
+                    assert.equal(readonly, false, 'un lecteur n\'écrit rien');
+                    const touchesStructure = actions.some(a => a[1] === '_grist_Views_section' || /Table|Column/.test(a[0]));
+                    if (!structure && touchesStructure) throw new Error(STRUCTURE);
+                    events.push(`action:${actions.map(a => a[0] + (a[0] === 'UpdateRecord' ? ':' + a[1] : '')).join('+')}`);
+                    for (const [name, table, id, values] of actions) {
+                        if (name === 'AddRawTable') { doc.columns = ['A', 'B', 'C']; doc.modeles = []; doc.rawTable = true; }
+                        else if (name === 'RemoveColumn') doc.columns = doc.columns.filter(c => c !== id);
+                        else if (name === 'AddColumn') doc.columns.push(id);
+                        else if (table === 'Publipostage_Modeles' && name === 'AddRecord') doc.modeles.push({ id: doc.modeles.length + 1, ...values });
+                        else if (table === 'Publipostage_Modeles') Object.assign(doc.modeles.find(r => r.id === id), values);
+                        else {
+                            rows.get(id).options = values.options;
+                            if (id === own) setTimeout(() => onOptions(widgetOptions(own)), 5);
+                        }
                     }
                 },
             } },
         initUi() {}, uiToast: (message, type) => events.push({ message, type }),
         uiOpenModal() { events.push('modale'); }, uiCloseModal() {}, uiSetTemplate() {}, uiEnableActions() {}, uiShowPreview() {},
-        uiPreviewEmptyText() {}, uiSetWarnings() {}, uiPersistBanner: text => events.push({ bandeau: text }),
+        uiPreviewEmptyText() {}, uiSetWarnings() {}, uiPersistBanner: text => text && events.push({ bandeau: text }),
         PDFLib: { PDFDocument: { load: async () => { throw new Error('PDF invalide'); } } },
     });
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8'), app);
     app.readFileAsBuffer = async file => file.buffer;
     const start = () => onOptions(widgetOptions(own));
-    return { app, events, saved: widgetOptions, rows, start, state: () => vm.runInContext('state', app) };
+    const fileOf = row => new Uint8Array(files.get(row.Fichier[1]));
+    return { app, events, saved: widgetOptions, rows, doc, files, fileOf, start, state: () => vm.runInContext('state', app) };
 }
-const docx = app => template(app, para('{{Titre}}'));
+const docx = (app, text = '{{Titre}}') => template(app, para(text));
 const toasts = events => events.filter(e => e.message).map(e => `${e.type}:${e.message}`);
+const writes = events => events.filter(e => typeof e === 'string' && /^(action|téléversé)/.test(e));
+const banner = events => (events.find(e => e.bandeau) || {}).bandeau || '';
 
 test('un DOCX invalide est refusé et le modèle enregistré est conservé', async () => {
     const { app, events, saved } = controller({ sections: [section(7, { templateId: 42, templateName: 'ancien.docx' })] });
     await app.handleTemplateUpload({ name: 'invalide.docx', buffer: template(app, para('{Titre')) });
-    assert.equal(events.some(e => typeof e === 'string' && e.startsWith('écrit')), false);
+    assert.deepEqual(writes(events), []);
     assert.deepEqual(saved(7), { templateId: 42, templateName: 'ancien.docx' });
     assert.equal(events.at(-1).type, 'error');
 });
 test('un PDF invalide est refusé', async () => {
     const { app, events } = controller();
     await app.handleTemplateUpload({ name: 'invalide.pdf', buffer: new Uint8Array() });
-    assert.equal(events.includes('écrit:7'), false);
+    assert.deepEqual(writes(events), []);
     assert.equal(events.at(-1).type, 'error');
 });
 test('le format binaire .doc est refusé avec une consigne de conversion', async () => {
@@ -74,107 +113,188 @@ test('le format binaire .doc est refusé avec une consigne de conversion', async
 test('un modèle de plus de 8 Mo est refusé', async () => {
     const { app, events } = controller();
     await app.handleTemplateUpload({ name: 'lourd.docx', buffer: new Uint8Array(8 * 1024 * 1024 + 1) });
-    assert.equal(events.includes('écrit:7'), false);
+    assert.deepEqual(writes(events), []);
     assert.match(events.at(-1).message, /trop lourd/);
 });
 
-test('le modèle est écrit dans le document sans passer par le bouton « Enregistrer »', async () => {
-    const { app, events, saved, start } = controller({ sections: [section(7, { templateId: 42, templateName: 'ancien.docx', autre: 'conserver' })] });
-    start();
+test('le modèle est rangé en pièce jointe dans une table sans page ; les options ne gardent que son nom', async () => {
+    const { app, events, saved, doc, fileOf, start } = controller({ sections: [section(7, { templateId: 42, templateName: 'ancien.docx', autre: 'conserver' })], attachments: { 42: [1] } });
+    start(); await tick();
     const buffer = docx(app);
     await app.handleTemplateUpload({ name: 'MODELE.DOCX', buffer });
+    assert.equal(doc.rawTable, true, 'AddRawTable : pas de nouvelle page');
+    assert.deepEqual(doc.columns, ['Widget', 'Modele', 'Empreinte', 'Fichier']);
+    const row = doc.modeles.find(r => r.Modele === 'MODELE.DOCX');
+    assert.equal(row.Widget, 7);
+    assert.deepEqual(fileOf(row), buffer);
     const options = saved(7);
-    assert.equal(options.templateName, 'MODELE.DOCX');
-    assert.equal(options.autre, 'conserver');
-    assert.equal(options.templateId, undefined, "plus de pièce jointe : rien que Grist puisse supprimer");
-    assert.deepEqual(new Uint8Array(app.base64ToBuffer(options.templateData)), buffer);
+    assert.deepEqual(Object.keys(options).sort(), ['autre', 'templateHash', 'templateName', 'templateWidget']);
+    assert.equal(options.templateHash, row.Empreinte);
+    assert.equal(options.templateWidget, 7);
     assert.match(options.templateHash, /^[0-9a-f]{24}$/);
-    assert.equal(events.includes('setOptions'), false);
+    assert.equal(events.filter(e => /^action:.*AddRecord.*_grist_Views_section/.test(e)).length >= 1, true,
+        'fichier et options dans la même action : un Ctrl+Z annule les deux');
     assert.deepEqual(toasts(events).at(-1), 'success:Modèle enregistré dans le document');
     assert.equal(app.getTemplateType('MODELE.PDF'), 'pdf');
 });
 
+test('remplacement du modèle : la ligne du widget est mise à jour', async () => {
+    const { app, doc, fileOf, saved, start } = controller();
+    start(); await tick();
+    await app.handleTemplateUpload({ name: 'a.docx', buffer: docx(app, '{A}') });
+    const b = docx(app, '{B}');
+    await app.handleTemplateUpload({ name: 'b.docx', buffer: b });
+    assert.equal(doc.modeles.length, 1);
+    assert.equal(doc.modeles[0].Modele, 'b.docx');
+    assert.deepEqual(fileOf(doc.modeles[0]), b);
+    assert.equal(saved(7).templateName, 'b.docx');
+});
+
 test('deux widgets neufs sur la même table : seul le sien reçoit le modèle', async () => {
     const autre = section(5, null), autreTable = section(6, null, { tableRef: 2 }), autreUrl = section(8, null, { url: 'https://ailleurs.test/w.html' });
-    const { app, saved, rows, start, events } = controller({ sections: [autre, autreTable, autreUrl, section(7, null)] });
-    start();
+    const { app, saved, rows, doc, start } = controller({ sections: [autre, autreTable, autreUrl, section(7, null)] });
+    start(); await tick();
     await app.handleTemplateUpload({ name: 'a.docx', buffer: docx(app) });
     assert.equal(saved(7).templateName, 'a.docx');
+    assert.deepEqual(doc.modeles.map(r => r.Widget), [7]);
     assert.equal(rows.get(5).options, autre.options, "l'autre widget, sondé puis rétabli, retrouve ses options");
     assert.equal(saved(6), null);
     assert.equal(saved(8), null);
-    assert.equal(events.includes('setOptions'), false);
-});
-
-test('les options enregistrées départagent deux widgets de la même table sans sonde', async () => {
-    const { app, saved, events, start } = controller({ sections: [section(5, { templateName: 'x.docx', templateData: 'AA==' }), section(7, null)] });
-    start();
-    await app.handleTemplateUpload({ name: 'a.docx', buffer: docx(app) });
-    assert.equal(saved(7).templateName, 'a.docx');
-    assert.deepEqual(events.filter(e => typeof e === 'string' && e.startsWith('écrit')), ['écrit:7']);
 });
 
 test('lecture seule : rien n\'est écrit, le modèle sert pour la session', async () => {
     const { app, events, state, start } = controller({ readonly: true });
-    start();
+    start(); await tick();
     await app.handleTemplateUpload({ name: 'a.docx', buffer: docx(app) });
     assert.equal(state().templateName, 'a.docx');
-    assert.equal(events.some(e => e === 'setOptions' || /^écrit/.test(e)), false);
+    assert.deepEqual(writes(events), []);
     assert.match(toasts(events).at(-1), /^error:Lecture seule/);
 });
 
-test('écriture refusée : options proposées à Grist et bandeau « Enregistrer »', async () => {
-    const { app, events, start } = controller({ denied: true });
-    start();
-    await app.handleTemplateUpload({ name: 'a.docx', buffer: docx(app) });
-    assert.equal(events.includes('setOptions'), true);
-    assert.match(events.find(e => e.bandeau).bandeau, /cliquez sur « Enregistrer »/);
+test('structure réservée aux propriétaires, table déjà prête : l\'éditeur enregistre son modèle', async () => {
+    const { app, events, doc, fileOf, saved, start } = controller({ structure: false, modeles: [] });
+    start(); await tick();
+    const buffer = docx(app);
+    await app.handleTemplateUpload({ name: 'a.docx', buffer });
+    assert.equal(doc.modeles.length, 1);
+    assert.equal(doc.modeles[0].Widget, 7);
+    assert.deepEqual(fileOf(doc.modeles[0]), buffer);
+    assert.equal(saved(7), null, 'options non modifiables : inchangées');
+    assert.deepEqual(toasts(events).at(-1), 'success:Modèle enregistré dans le document');
+    assert.equal(banner(events), '');
 });
 
-test('structure réservée aux propriétaires : pas de bouton « Enregistrer » voué à l\'échec', async () => {
-    const { app, events, state, start } = controller({ denied: 'Blocked by table structure access rules' });
-    start();
+test('structure réservée aux propriétaires, table absente : session seulement, un propriétaire doit ouvrir le widget', async () => {
+    const { app, events, doc, state, start } = controller({ structure: false });
+    start(); await tick();
     await app.handleTemplateUpload({ name: 'a.docx', buffer: docx(app) });
     assert.equal(state().templateName, 'a.docx');
-    assert.equal(events.includes('setOptions'), false);
-    assert.match(events.find(e => e.bandeau).bandeau, /réserve la modification de sa structure aux propriétaires/);
+    assert.equal(doc.columns, null);
+    assert.match(banner(events), /Un propriétaire doit ouvrir ce widget une fois/);
 });
 
-test('au chargement, le modèle intégré aux options est utilisé tel quel', async () => {
+test('structure réservée : à l\'ouverture par un propriétaire, la table est préparée pour les éditeurs', async () => {
+    const { doc, start } = controller({ rules: ['-S'] });
+    start(); await tick();
+    assert.deepEqual(doc.columns, ['Widget', 'Modele', 'Empreinte', 'Fichier']);
+    assert.equal(doc.rawTable, true);
+});
+
+test('document sans règle : ouvrir le widget ne crée rien', async () => {
+    const { doc, events, start } = controller();
+    start(); await tick();
+    assert.equal(doc.columns, null);
+    assert.deepEqual(writes(events), []);
+    assert.equal(events.includes('modale'), true);
+});
+
+test('structure réservée et deux widgets neufs sur la même table : message clair', async () => {
+    const { app, events, doc, start } = controller({ structure: false, modeles: [], sections: [section(5, null), section(7, null)] });
+    start(); await tick();
+    await app.handleTemplateUpload({ name: 'a.docx', buffer: docx(app) });
+    assert.equal(doc.modeles.length, 0);
+    assert.match(banner(events), /Demandez à un propriétaire de charger un premier modèle/);
+});
+
+test('au chargement, seul le modèle du widget est téléchargé, une seule fois', async () => {
+    const mine = [80, 75, 3, 4, 1], other = [80, 75, 3, 4, 2];
+    const { events, state, start } = controller({
+        sections: [section(5, { templateName: 'x.docx', templateHash: 'hx', templateWidget: 5 }), section(7, { templateName: 'm.docx', templateHash: 'hm', templateWidget: 7 })],
+        modeles: [{ Widget: 5, Modele: 'x.docx', Empreinte: 'hx', Fichier: ['L', 1] }, { Widget: 7, Modele: 'm.docx', Empreinte: 'hm', Fichier: ['L', 2] }],
+        attachments: { 1: other, 2: mine } });
+    start(); start(); await tick(); start(); await tick();
+    assert.equal(state().templateName, 'm.docx');
+    assert.deepEqual(new Uint8Array(state().templateBuffer), new Uint8Array(mine));
+    assert.deepEqual(events.filter(e => /^téléchargé/.test(e)), ['téléchargé:2']);
+    assert.deepEqual(writes(events), []);
+});
+
+test('éditeur d\'un document à structure réservée : sa ligne l\'emporte sur des options restées anciennes', async () => {
+    const { state, start } = controller({ structure: false,
+        sections: [section(7, { templateName: 'ancien.docx', templateHash: 'h1', templateWidget: 7 })],
+        modeles: [{ Widget: 7, Modele: 'nouveau.docx', Empreinte: 'h2', Fichier: ['L', 2] }], attachments: { 2: [9] } });
+    start(); await tick();
+    assert.equal(state().templateName, 'nouveau.docx');
+});
+
+test('widget dupliqué : il reprend le modèle désigné par ses options', async () => {
+    const options = { templateName: 'm.docx', templateHash: 'hm', templateWidget: 5 };
+    const { state, doc, saved, start } = controller({ sections: [section(5, options), section(7, options)],
+        modeles: [{ Widget: 5, Modele: 'm.docx', Empreinte: 'hm', Fichier: ['L', 2] }], attachments: { 2: [9] } });
+    start(); await tick(3000);
+    assert.equal(state().templateName, 'm.docx');
+    assert.deepEqual(doc.modeles.map(r => r.Widget).sort(), [5, 7], 'puis une ligne propre, sans recopier le fichier');
+    assert.deepEqual(doc.modeles.map(r => r.Fichier[1]), [2, 2]);
+    assert.equal(saved(7).templateWidget, 7);
+    assert.equal(saved(5).templateWidget, 5);
+});
+
+test('copie sans données (table vidée) : le widget dit quel modèle recharger', async () => {
+    const { events, start } = controller({ sections: [section(7, { templateName: 'perdu.docx', templateHash: 'h', templateWidget: 7 })], modeles: [] });
+    start(); await tick();
+    assert.match(toasts(events).at(-1), /« perdu.docx » n'est plus disponible/);
+    assert.equal(events.includes('modale'), true);
+});
+
+test('modèle en base64 dans les options (version précédente) : utilisé, puis rangé dans la table et retiré des options', async () => {
     const buffer = new Uint8Array([80, 75, 3, 4, 1, 2, 3]);
-    const { app, state } = controller({ sections: [section(7, { templateName: 'm.docx', templateHash: 'abc', templateData: Buffer.from(buffer).toString('base64') })] });
-    await app.applyOptions(await app.grist.getOptions(), true);
+    const { state, saved, doc, fileOf, start } = controller({ sections: [section(7, { templateName: 'm.docx', templateHash: 'abc', templateData: Buffer.from(buffer).toString('base64') })] });
+    start(); await tick();
     assert.equal(state().templateName, 'm.docx');
     assert.deepEqual(new Uint8Array(state().templateBuffer), buffer);
+    assert.deepEqual(saved(7), { templateName: 'm.docx', templateHash: 'abc', templateWidget: 7 });
+    assert.deepEqual(fileOf(doc.modeles[0]), buffer);
 });
 
-test('ancien format (pièce jointe) : chargé puis intégré aux options', async () => {
-    const { app, saved, state, start } = controller({ sections: [section(7, { templateId: 42, templateName: 'ancien.docx' })] });
-    const buffer = new Uint8Array([1, 2, 3]).buffer;
-    app.downloadAttachmentFromGrist = async id => { assert.equal(id, 42); return buffer; };
-    start();
-    await new Promise(r => setTimeout(r, 50));
+test('modèle en base64 chez un lecteur : utilisé, rien n\'est écrit', async () => {
+    const { state, events, start } = controller({ readonly: true, sections: [section(7, { templateName: 'm.docx', templateHash: 'abc', templateData: 'UEsDBA==' })] });
+    start(); await tick();
+    assert.equal(state().templateName, 'm.docx');
+    assert.deepEqual(writes(events), []);
+});
+
+test('ancien format (pièce jointe non rangée) : chargé, rangé dans la table et retiré des options', async () => {
+    const { saved, state, doc, start } = controller({ sections: [section(7, { templateId: 42, templateName: 'ancien.docx' })], attachments: { 42: [1, 2, 3] } });
+    start(); await tick();
     assert.equal(state().templateName, 'ancien.docx');
     assert.equal(saved(7).templateId, undefined);
-    assert.equal(saved(7).templateData, 'AQID');
+    assert.equal(saved(7).templateName, 'ancien.docx');
+    assert.equal(doc.modeles[0].Modele, 'ancien.docx');
 });
 
 test('ancien format chez un lecteur : téléchargé une seule fois malgré les notifications Grist', async () => {
-    const { app, state, start, events } = controller({ readonly: true, sections: [section(7, { templateId: 42, templateName: 'ancien.docx' })] });
-    let downloads = 0;
-    app.downloadAttachmentFromGrist = async () => { downloads++; return new Uint8Array([1]).buffer; };
+    const { state, start, events } = controller({ readonly: true, sections: [section(7, { templateId: 42, templateName: 'ancien.docx' })], attachments: { 42: [1] } });
     start(); start(); start();
-    await new Promise(r => setTimeout(r, 30));
-    assert.equal(downloads, 1);
+    await tick();
+    assert.deepEqual(events.filter(e => /^téléchargé/.test(e)), ['téléchargé:42']);
     assert.equal(state().templateName, 'ancien.docx');
-    assert.equal(events.some(e => /^écrit/.test(e)), false);
+    assert.deepEqual(writes(events), []);
 });
 
 test('ancien format dont la pièce jointe a été supprimée : message explicite', async () => {
-    const { app, events, start } = controller({ sections: [section(7, { templateId: 42, templateName: 'ancien.docx' })] });
-    app.downloadAttachmentFromGrist = async () => { throw new Error('404'); };
+    const { events, start } = controller({ sections: [section(7, { templateId: 42, templateName: 'ancien.docx' })] });
     start();
-    await new Promise(r => setTimeout(r, 20));
+    await tick();
     assert.match(toasts(events).at(-1), /« ancien.docx » n'est plus disponible/);
     assert.equal(events.includes('modale'), true);
 });

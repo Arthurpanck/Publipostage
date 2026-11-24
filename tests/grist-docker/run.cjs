@@ -24,6 +24,9 @@ async function uploadAs(email, d, file, n = 0) {
   return { ...st, saveButton };
 }
 const is = (st, file) => st.name === file.name;
+const reserveStructure = d => G.apply(d, [['AddRecord', '_grist_ACLResources', -1, { tableId: '*', colIds: '*' }],
+  ['AddRecord', '_grist_ACLRules', null, { resource: -1, aclFormula: 'user.Access != OWNER', permissionsText: '-S', memo: '' }]]);
+const templateRows = d => G.sql(d.doc, 'select Widget, Modele, Empreinte, Fichier from Publipostage_Modeles').catch(() => null);
 
 // Modèle à l'ancienne : pièce jointe téléversée + templateId dans les options
 async function legacyDoc(url) {
@@ -68,25 +71,47 @@ const SCENARIOS = {
       ['AddRecord', '_grist_ACLRules', null, { resource: -1, aclFormula: "user.Access == 'viewers'", permissionsText: '-R', memo: '' }]]);
     const r = await G.check(VIEWER, d); return [is(r, A), r.name];
   },
-  'Structure réservée aux propriétaires : l\'éditeur est prévenu, le propriétaire enregistre': async url => {
-    const d = await G.createDoc(url);
-    await G.apply(d, [['AddRecord', '_grist_ACLResources', -1, { tableId: '*', colIds: '*' }],
-      ['AddRecord', '_grist_ACLRules', null, { resource: -1, aclFormula: 'user.Access != OWNER', permissionsText: '-S', memo: '' }]]);
-    const ed = await uploadAs(EDITOR, d, A);
-    const [afterEditor] = await G.savedOptions(d);
-    await uploadAs(OWNER, d, B);
-    const r = await G.check(EDITOR, d);
-    return [/propriétaires/.test(ed.banner) && ed.saveButton === 0 && !afterEditor && is(r, B),
-      `éditeur : « ${ed.banner.slice(0, 70)}… » · bouton Enregistrer allumé : ${ed.saveButton} · propriétaire puis éditeur : ${r.name}`];
+  'Éditeur : envoi, puis ouverture par un lecteur et par le propriétaire': async url => {
+    const d = await G.createDoc(url); const ed = await uploadAs(EDITOR, d, A);
+    const v = await G.check(VIEWER, d), o = await G.check(OWNER, d);
+    return [/enregistré/.test(ed.toast) && is(v, A) && is(o, A), `« ${ed.toast} » · lecteur : ${v.name} · propriétaire : ${o.name}`];
+  },
+  'Structure réservée : l\'éditeur est prévenu, puis enregistre une fois le widget ouvert par le propriétaire': async url => {
+    const d = await G.createDoc(url); await reserveStructure(d);
+    const before = await uploadAs(EDITOR, d, A);
+    const noTable = !(await templateRows(d));
+    await G.check(OWNER, d); // ouverture seule : prépare la table
+    const ed = await uploadAs(EDITOR, d, B);
+    const v = await G.check(VIEWER, d), [opts] = await G.savedOptions(d);
+    return [/propriétaire doit ouvrir/.test(before.banner) && before.saveButton === 0 && noTable && /enregistré/.test(ed.toast) && !ed.banner && is(v, B),
+      `1er envoi : « ${before.banner.slice(0, 60)}… » · après ouverture par le propriétaire : « ${ed.toast} » · lecteur : ${v.name} · options : ${JSON.stringify(opts)}`];
+  },
+  'Structure réservée : le propriétaire charge, l\'éditeur remplace': async url => {
+    const d = await G.createDoc(url); await reserveStructure(d);
+    await uploadAs(OWNER, d, A); const ed = await uploadAs(EDITOR, d, B);
+    const r = await G.check(OWNER, d), e = await G.check(EDITOR, d);
+    return [/enregistré/.test(ed.toast) && is(r, B) && is(e, B), `« ${ed.toast} » · propriétaire : ${r.name} · éditeur : ${e.name}`];
   },
   'Migration dans un document à structure réservée : faite à l\'ouverture par le propriétaire': async url => {
-    const d = await legacyDoc(url);
-    await G.apply(d, [['AddRecord', '_grist_ACLResources', -1, { tableId: '*', colIds: '*' }],
-      ['AddRecord', '_grist_ACLRules', null, { resource: -1, aclFormula: 'user.Access != OWNER', permissionsText: '-S', memo: '' }]]);
+    const d = await legacyDoc(url); await reserveStructure(d);
     const ed = await G.check(EDITOR, d); const [still] = await G.savedOptions(d);
     const ow = await G.check(OWNER, d); const [after] = await G.savedOptions(d);
-    return [is(ed, A) && !!still.templateId && is(ow, A) && !!after.templateData && !after.templateId,
-      `éditeur : ${ed.name} (options inchangées) · propriétaire : ${ow.name} → ${Object.keys(after).sort()}`];
+    await purge(d); const v = await G.check(VIEWER, d);
+    return [is(ed, A) && !!still.templateId && is(ow, A) && !after.templateData && !after.templateId && after.templateName === A.name && is(v, A),
+      `éditeur : ${ed.name} (options inchangées) · propriétaire : ${ow.name} → ${Object.keys(after).sort()} · lecteur après purge : ${v.name}`];
+  },
+  'Migration : modèle en base64 dans les options (version précédente)': async url => {
+    const d = await G.createDoc(url);
+    const [row] = await G.sql(d.doc, `select options from _grist_Views_section where id=${d.sections[0]}`);
+    const options = JSON.parse(row.options), view = JSON.parse(options.customView);
+    view.widgetOptions = { templateName: A.name, templateHash: 'ancien', templateData: A.buffer.toString('base64') };
+    options.customView = JSON.stringify(view);
+    await G.apply(d, [['UpdateRecord', '_grist_Views_section', d.sections[0], { options: JSON.stringify(options) }]]);
+    const v0 = await G.check(VIEWER, d); const [still] = await G.savedOptions(d);
+    const ed = await G.check(EDITOR, d); const [after] = await G.savedOptions(d);
+    await purge(d); const v = await G.check(VIEWER, d);
+    return [is(v0, A) && !!still.templateData && is(ed, A) && !after.templateData && is(v, A),
+      `lecteur : ${v0.name} (rien d'écrit) · éditeur : ${ed.name} → ${Object.keys(after).sort()} · lecteur après purge : ${v.name}`];
   },
   'Purge des pièces jointes inutilisées (au-delà de 7 jours)': async url => {
     const d = await G.createDoc(url); await uploadAs(OWNER, d, A);
@@ -98,10 +123,12 @@ const SCENARIOS = {
     const doc = await G.api(OWNER, 'POST', `/api/docs/${d.doc}/copy`, { workspaceId: await G.workspace(), documentName: 'copie' });
     const r = await G.check(OWNER, { ...d, doc }); return [is(r, A), r.name];
   },
-  'Copie du document comme modèle (sans données)': async url => {
+  'Copie du document comme modèle (sans données) : message clair': async url => {
     const d = await G.createDoc(url); await uploadAs(OWNER, d, A);
     const doc = await G.api(OWNER, 'POST', `/api/docs/${d.doc}/copy`, { workspaceId: await G.workspace(), documentName: 'copie', asTemplate: true });
-    const r = await G.check(OWNER, { ...d, doc }); return [is(r, A), r.name];
+    const s = await G.session(OWNER); await G.openDoc(s, { ...d, doc }); await G.sleep(2500);
+    const st = await G.widgetState(await G.widgetFrame(s)); await s.ctx.close();
+    return [!st.name && /« modele-A.docx » n'est plus disponible/.test(st.toast) && st.modal, `« ${st.toast.slice(0, 90)}… »`];
   },
   'Deux widgets neufs sur la même table': async url => {
     const d = await G.createDoc(url, { widgets: 2 });
@@ -140,7 +167,8 @@ const SCENARIOS = {
   },
   'Gros modèle (5 Mo)': async url => {
     const d = await G.createDoc(url); const t0 = Date.now(); await uploadAs(OWNER, d, GROS);
-    const r = await G.check(EDITOR, d); return [is(r, GROS), `${r.name} · ${((Date.now() - t0) / 1000).toFixed(1)} s`];
+    const r = await G.check(EDITOR, d); const [opts] = await G.savedOptions(d); const size = JSON.stringify(opts).length;
+    return [is(r, GROS) && size < 500, `${r.name} · ${((Date.now() - t0) / 1000).toFixed(1)} s · options du widget : ${size} octets`];
   },
   'Lecteur qui choisit un modèle : session seulement, rien d\'écrit': async url => {
     const d = await G.createDoc(url); const up = await uploadAs(VIEWER, d, A);

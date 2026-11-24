@@ -189,9 +189,12 @@ vertical des images (`w:position`) : les pilules y paraissent un peu hautes.
 
 ## Modèle persistant
 
-`upload.test.cjs` vérifie, dans un document Grist simulé, que le modèle est
-écrit dans les options de la section du widget (sans le bouton « Enregistrer »
-de Grist), que deux widgets d'une même table sont départagés, et que l'ancien
-format (pièce jointe) est repris. Les scénarios contre un vrai Grist sont dans
+`upload.test.cjs` vérifie, dans un document Grist simulé (sections de widget,
+table `Publipostage_Modeles`, pièces jointes, règles d'accès), que le modèle
+est rangé en pièce jointe dans la table et que les options du widget ne
+gardent que son nom et son empreinte ; qu'un éditeur d'un document qui réserve
+la structure aux propriétaires enregistre son modèle dès que la table existe ;
+que deux widgets d'une même table sont départagés ; qu'un widget ne télécharge
+que son modèle ; et que les anciens formats (base64 dans les options, pièce
+jointe non rangée) sont repris. Les scénarios contre un vrai Grist sont dans
 `grist-docker/`.
-

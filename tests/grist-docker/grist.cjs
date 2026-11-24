@@ -116,14 +116,16 @@ async function upload(s, file, n = 0) {
   await f.setInputFiles('#templateFile', { name: file.name, mimeType: 'application/octet-stream', buffer: file.buffer });
   const t0 = Date.now();
   let st = await widgetState(f);
-  while (Date.now() - t0 < 20000 && !/enregistré|Lecture seule|Erreur|trop lourd|Enregistrer/.test(st.toast + st.banner)) { await sleep(300); st = await widgetState(f); }
+  while (Date.now() - t0 < 20000 && !/enregistré|Lecture seule|Erreur|trop lourd|session seulement/.test(st.toast + st.banner)) { await sleep(300); st = await widgetState(f); }
   return st;
 }
 
-// Ouvre le document dans un navigateur neuf et lit le modèle du widget n
+// Ouvre le document dans un navigateur neuf et lit le modèle du widget n.
+// La session reste ouverte un instant : le widget reprend les anciens formats
+// en arrière-plan.
 async function check(email, d, n = 0) {
   const s = await session(email);
-  try { await openDoc(s, d); return await templateIn(s, n); } finally { await s.ctx.close(); }
+  try { await openDoc(s, d); const st = await templateIn(s, n); await sleep(1500); return st; } finally { await s.ctx.close(); }
 }
 
 async function savedOptions(d) {

@@ -42,13 +42,25 @@ et `viewer@test.fr` (lecteur).
   Le widget le dit à l'éditeur et reprend l'ancien format quand un
   propriétaire l'ouvre.
 
-D'où les choix du widget (`template-store.js`) : le modèle est rangé dans les
-options du widget, et le widget les écrit lui-même dans le document. La
-purge `removeUnused?expiredonly=0` simule les 7 jours.
+- Grist envoie à chaque ouverture du document les options de tous les
+  widgets, quelle que soit la page affichée. Un modèle rangé dans les options
+  (version précédente, en base64) était donc téléchargé par tout le monde, à
+  chaque ouverture, multiplié par le nombre de widgets.
+
+D'où les choix du widget (`template-store.js`) : le modèle est une pièce jointe
+rangée dans la table `Publipostage_Modeles` (données brutes, sans page), une
+ligne par widget repérée par le numéro de sa section ; rangée dans une cellule,
+elle n'est pas purgée. Les options du widget ne gardent que le nom, l'empreinte
+et le numéro du widget : leur changement prévient les autres utilisateurs, et
+l'envoi (fichier + options) est une seule action, annulable par Ctrl+Z.
+Écrire dans la table ne demande que le droit de modifier les données : quand
+la structure est réservée aux propriétaires, la table est préparée à
+l'ouverture du widget par un propriétaire, puis les éditeurs y enregistrent
+leurs modèles. La purge `removeUnused?expiredonly=0` simule les 7 jours.
 
 ## Résultats
 
-Ancienne version (modèle en pièce jointe + `grist.setOptions`) :
+Première version (modèle en pièce jointe non rangée + `grist.setOptions`) :
 
 | Scénario | Résultat |
 |---|---|
@@ -59,4 +71,22 @@ Ancienne version (modèle en pièce jointe + `grist.setOptions`) :
 | Copie du document comme modèle | perdu |
 | Deux widgets sur la même page, « Enregistrer » cliqué une fois | le second perdu |
 
-Version actuelle : tous les scénarios de `run.cjs` passent.
+Version précédente (modèle en base64 dans les options) : scénarios ok, sauf
+pour un éditeur quand la structure est réservée aux propriétaires, mais
+ouverture du document très lente (ci-dessous).
+
+Version actuelle : tous les scénarios de `run.cjs` passent (25), dont un
+éditeur qui charge un modèle dans un document à structure réservée, une fois
+le widget ouvert par le propriétaire. Changement de comportement : une copie
+« comme modèle » (sans données) perd les modèles, le widget dit lequel
+recharger.
+
+Vitesse, débit limité à 20 Mbit/s (Chromium), 10 widgets avec un modèle de
+2 Mo chacun :
+
+| | Version précédente (base64 dans les options) | Version actuelle |
+|---|---|---|
+| Données reçues à l'ouverture du document | 26,7 Mo | ≈ 0 |
+| Page sans widget affichée | 32 s | 0,7 s |
+| Page du widget, aperçu affiché | 33,5 s | 3,1 s |
+| Envoi d'un modèle de 2 Mo | plus de 20 s | 1,5 s |

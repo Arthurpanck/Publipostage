@@ -27,15 +27,18 @@ initUi({
     onDownloadZip: downloadBulk,
 });
 
-// Le modèle vit dans les options du widget (voir template-store.js). Grist
-// les envoie au démarrage puis à chaque modification, y compris quand un autre
-// utilisateur change le modèle.
+// Le modèle est rangé dans la table Publipostage_Modeles ; les options du
+// widget le désignent (voir template-store.js). Grist les envoie au démarrage
+// puis à chaque modification, y compris quand un autre utilisateur change le
+// modèle. Les notifications sont traitées l'une après l'autre.
 let optionsSeen = false;
-grist.onOptions(async (options) => {
+let optionsChain = Promise.resolve();
+grist.onOptions((options) => {
     noteOptions(options);
     const first = !optionsSeen;
     optionsSeen = true;
-    await applyOptions(options, first);
+    optionsChain = optionsChain.then(() => applyOptions(options, first)).catch(e => console.error(e));
+    if (first) prepareTableForEditors();
 });
 
 grist.onRecord(async (record, mappings) => {
@@ -84,24 +87,27 @@ async function handleTemplateUpload(file) {
         if (type === 'docx') compileDocxTemplate(buffer);
         else await PDFLib.PDFDocument.load(buffer);
 
-        const options = await templateOptions(await grist.getOptions(), buffer, file.name);
-        updateTemplateState(buffer, file.name, type, options.templateHash);
+        const hash = await templateHash(buffer);
+        updateTemplateState(buffer, file.name, type, hash);
         uiCloseModal();
 
-        const status = await persistOptions(options);
-        if (status === 'saved') {
+        const status = await storeTemplate({ name: file.name, hash, buffer });
+        if (status === 'saved' || status === 'row') {
             uiPersistBanner(null);
             uiToast("Modèle enregistré dans le document", "success");
         } else if (status === 'readonly') {
             uiToast("Lecture seule : modèle utilisé pour cette session uniquement", "error");
         } else if (status === 'owners') {
-            uiPersistBanner("Modèle utilisé pour cette session seulement : ce document réserve la modification de sa structure aux propriétaires. Demandez à un propriétaire de charger le modèle, ou d'autoriser les éditeurs à modifier la structure (règles d'accès).");
-        } else {
-            watchPendingTemplate(options.templateHash);
+            uiPersistBanner("Modèle utilisé pour cette session seulement : ce document réserve la modification de sa structure aux propriétaires. Un propriétaire doit ouvrir ce widget une fois ; ensuite, les éditeurs pourront enregistrer leurs modèles.");
+        } else if (status === 'section') {
+            uiPersistBanner("Modèle utilisé pour cette session seulement : plusieurs widgets Publipostage de cette table n'ont pas encore de modèle, et ce document réserve la modification de sa structure aux propriétaires. Demandez à un propriétaire de charger un premier modèle dans ce widget.");
         }
     } catch (err) {
         console.error(err);
         uiToast("Erreur lors de la sauvegarde : " + err.message, "error");
+        if (state.templateName === file.name) {
+            uiPersistBanner("Modèle utilisé pour cette session seulement : son enregistrement dans le document a échoué.");
+        }
     }
 }
 
@@ -230,77 +236,37 @@ function updateActionsState() {
     uiEnableActions(ready && state.currentRecord !== null, ready && state.allRecords.length > 0);
 }
 
-// Charge le modèle décrit par les options. Sans modèle, la modale
+// Charge le modèle désigné par les options. Sans modèle, la modale
 // d'instructions s'ouvre au premier chargement.
+let missingShown = null;
 async function applyOptions(options, first) {
-    const saved = templateFromOptions(options);
-    if (!saved) {
+    let template;
+    try {
+        template = await readTemplate(options, hash => !!hash && hash === state.templateHash);
+    } catch (e) {
+        console.warn("Erreur chargement", e);
+        uiToast("Impossible de charger le modèle : " + e.message, "error");
+        return;
+    }
+    if (!template) {
         if (first && !state.templateBuffer) uiOpenModal();
         return;
     }
-    if (saved.hash && saved.hash === state.templateHash) return;
-    if (saved.legacyId && saved.legacyId === legacyLoaded) return;
-    const type = getTemplateType(saved.name);
+    if (template.missing) {
+        if (missingShown === template.name || state.templateBuffer) return;
+        missingShown = template.name;
+        uiToast(`Le modèle « ${template.name} » n'est plus disponible dans ce document (copie sans données, table ${TEMPLATE_TABLE} supprimée…) : chargez-le à nouveau.`, "error");
+        uiOpenModal();
+        return;
+    }
+    if (!template.buffer || template.hash === state.templateHash) return;
+    const type = getTemplateType(template.name);
     if (!type) {
         uiToast('Format du modèle enregistré non supporté.', 'error');
         return;
     }
-    if (saved.buffer) {
-        updateTemplateState(saved.buffer, saved.name, type, saved.hash);
-        uiPersistBanner(null);
-        return;
-    }
-    await loadLegacyTemplate(options, saved, type);
-}
-
-// Ancien format : le modèle était une pièce jointe que Grist finit par
-// supprimer. Il est intégré aux options dès qu'un éditeur ouvre le widget ;
-// pour un lecteur, il est chargé une fois par session.
-let legacyLoaded = null;
-async function loadLegacyTemplate(options, saved, type) {
-    legacyLoaded = saved.legacyId;
-    let buffer;
-    try {
-        uiToast("Récupération du modèle...", "normal");
-        buffer = await downloadAttachmentFromGrist(saved.legacyId);
-    } catch (e) {
-        console.warn("Erreur chargement", e);
-        uiToast(`Le modèle « ${saved.name} » n'est plus disponible dans Grist (pièce jointe supprimée ou inaccessible) : chargez-le à nouveau.`, "error");
-        uiOpenModal();
-        return;
-    }
-    const upgraded = await templateOptions(options, buffer, saved.name);
-    updateTemplateState(buffer, saved.name, type, upgraded.templateHash);
-    uiToast("Modèle chargé : " + saved.name, "success");
-    if (!isReadonly()) await persistOptions(upgraded, { fallback: false });
-}
-
-// Écriture directe impossible : le bandeau rappelle de cliquer sur
-// « Enregistrer » tant que le modèle n'est pas dans le document.
-let pendingWatch = null;
-function watchPendingTemplate(hash) {
-    uiPersistBanner("Modèle pas encore enregistré dans le document : cliquez sur « Enregistrer » (Save) en haut du widget, sinon il sera perdu au prochain chargement.");
-    clearInterval(pendingWatch);
-    pendingWatch = setInterval(async () => {
-        if (hash !== state.templateHash) return clearInterval(pendingWatch);
-        if (await isTemplateSaved(hash).catch(() => false)) {
-            clearInterval(pendingWatch);
-            uiPersistBanner(null);
-            uiToast("Modèle enregistré dans le document", "success");
-        }
-    }, 3000);
-}
-
-// Récupère le fichier de Grist (method GET)
-async function downloadAttachmentFromGrist(attachmentId) {
-    const tokenInfo = await grist.docApi.getAccessToken({ readOnly: true });
-    const url = `${tokenInfo.baseUrl}/attachments/${attachmentId}/download?auth=${tokenInfo.token}`;
-
-    const response = await fetch(url);
-    if (!response.ok) {
-        throw new Error('Impossible de récupérer le template');
-    }
-    return await response.arrayBuffer();
+    updateTemplateState(template.buffer, template.name, type, template.hash);
+    uiPersistBanner(null);
 }
 
 function readFileAsBuffer(file) {
