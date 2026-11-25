@@ -255,22 +255,33 @@ async function structureReserved() {
     }
 }
 
+// Crée la table ou complète ses colonnes. Renvoie false si seul un
+// propriétaire le peut. Plusieurs widgets peuvent s'y essayer au même moment :
+// un seul réussit, les autres échouent, relisent la table et la trouvent prête.
+async function ensureTemplateTable() {
+    for (let attempt = 0; ; attempt++) {
+        const setup = tableActions(await templateTableColumns());
+        if (!setup.length) return true;
+        try {
+            await grist.docApi.applyUserActions(setup);
+            return true;
+        } catch (e) {
+            if (isStructureDenied(e)) return false;
+            if (attempt) throw e;
+        }
+    }
+}
+
 // À l'ouverture du widget, par un utilisateur qui en a le droit :
 //  - une table incomplète (colonne supprimée) est réparée ;
 //  - dans un document qui réserve la structure aux propriétaires, la table
 //    est créée et le widget reçoit son numéro dans ses options, pour que les
 //    éditeurs puissent ensuite enregistrer leurs modèles (voir numberWidget).
-// Plusieurs widgets de la page peuvent préparer la table en même temps : un
-// seul réussit, l'échec des autres est sans conséquence.
 async function prepareTemplateTable() {
     if (isReadonly()) return;
     try {
         const reserved = await structureReserved();
-        const columns = await templateTableColumns();
-        const actions = tableActions(columns);
-        if (actions.length && (columns || reserved)) {
-            await grist.docApi.applyUserActions(actions).catch(e => console.warn('Table des modèles non préparée', e));
-        }
+        if (reserved || await templateTableColumns()) await ensureTemplateTable();
         if (reserved) await enqueueWrite(numberWidget);
     } catch (e) {
         console.warn('Widget non préparé', e);
@@ -310,7 +321,7 @@ function enqueueWrite(task) {
  *                 (structure réservée aux propriétaires) ;
  *  - 'readonly' : utilisateur en lecture seule, rien n'est écrit ;
  *  - 'owners'   : table absente ou incomplète, et seul un propriétaire peut
- *                 la préparer ;
+ *                 la préparer ; rien n'est envoyé ;
  *  - 'section'  : plusieurs widgets de la même table, impossibles à
  *                 départager sans écrire les options.
  * Une autre erreur est levée.
@@ -345,34 +356,28 @@ async function writeTemplate({ name, hash, buffer, attachmentId }, { migration =
     }
     if (!sectionId) throw new Error('Section du widget introuvable');
 
-    for (let attempt = 0; ; attempt++) {
-        const columns = await templateTableColumns();
-        const setup = tableActions(columns);
-        const own = (await templateRows()).find(r => r.widget === sectionId);
-        // Reprise : la ligne déjà enregistrée pour ce widget fait foi
-        if (migration && own) ({ name, hash } = own);
-        const data = [];
-        if (!own || own.hash !== hash || own.name !== name) {
-            if (!attachmentId) attachmentId = await uploadTemplateFile(buffer, name);
-            const fields = { Widget: sectionId, Modele: name, Empreinte: hash, Fichier: ['L', attachmentId] };
-            data.push(...setup, own ? ['UpdateRecord', TEMPLATE_TABLE, own.rowId, fields] : ['AddRecord', TEMPLATE_TABLE, null, fields]);
-        }
-        const section = await readSection(sectionId);
-        const pointer = sectionAction(section, pointerOptions(section.view.widgetOptions, name, hash, sectionId));
-        try {
-            // Une seule action : un Ctrl+Z rétablit le fichier et les options
-            await grist.docApi.applyUserActions([...data, pointer]);
-            return 'saved';
-        } catch (e) {
-            if (isStructureDenied(e)) {
-                if (data.length && setup.length) return 'owners';
-                if (data.length) await grist.docApi.applyUserActions(data);
-                return 'row';
-            }
-            // Un autre widget a pu préparer la table au même moment : la relire
-            if (attempt || !(data.length && setup.length)) throw e;
-        }
+    const own = (await templateRows()).find(r => r.widget === sectionId);
+    // Reprise : la ligne déjà enregistrée pour ce widget fait foi
+    if (migration && own) ({ name, hash } = own);
+    const data = [];
+    if (!own || own.hash !== hash || own.name !== name) {
+        // La table d'abord : si elle ne peut pas être préparée, rien n'est envoyé
+        if (!await ensureTemplateTable()) return 'owners';
+        if (!attachmentId) attachmentId = await uploadTemplateFile(buffer, name);
+        const fields = { Widget: sectionId, Modele: name, Empreinte: hash, Fichier: ['L', attachmentId] };
+        data.push(own ? ['UpdateRecord', TEMPLATE_TABLE, own.rowId, fields] : ['AddRecord', TEMPLATE_TABLE, null, fields]);
     }
+    const section = await readSection(sectionId);
+    const pointer = sectionAction(section, pointerOptions(section.view.widgetOptions, name, hash, sectionId));
+    try {
+        // Une seule action : un Ctrl+Z rétablit le fichier et les options
+        await grist.docApi.applyUserActions([...data, pointer]);
+        return 'saved';
+    } catch (e) {
+        if (!isStructureDenied(e)) throw e;
+    }
+    if (data.length) await grist.docApi.applyUserActions(data);
+    return 'row';
 }
 
 /**

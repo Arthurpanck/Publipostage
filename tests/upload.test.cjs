@@ -212,6 +212,14 @@ test('structure réservée aux propriétaires, table absente : session seulement
     assert.equal(state().templateName, 'a.docx');
     assert.equal(doc.columns, null);
     assert.match(banner(events), /Un propriétaire doit ouvrir ce widget une fois/);
+    assert.deepEqual(writes(events), [], 'le fichier n\'est pas envoyé pour rien');
+});
+
+test('ancien format ouvert par un éditeur qui ne peut pas le reprendre : utilisé, rien n\'est envoyé', async () => {
+    const { state, events, start } = controller({ structure: false, sections: [section(7, { templateName: 'm.docx', templateHash: 'abc', templateData: 'UEsDBA==' })] });
+    start(); await tick();
+    assert.equal(state().templateName, 'm.docx');
+    assert.deepEqual(writes(events), []);
 });
 
 test('structure réservée : à l\'ouverture par un propriétaire, la table est préparée pour les éditeurs', async () => {

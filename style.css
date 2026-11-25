@@ -55,6 +55,8 @@ code {
 
 @keyframes modalIn { from { opacity: 0; transform: scale(0.97) translateY(8px); } to { opacity: 1; transform: scale(1) translateY(0); } }
 @keyframes fadeDown { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
+/* Le toast est centré par un translateX : son animation doit le conserver */
+@keyframes toastIn { from { opacity: 0; transform: translate(-50%, -5px); } to { opacity: 1; transform: translate(-50%, 0); } }
 
 .app {
     display: flex;
@@ -460,7 +462,7 @@ code {
     box-shadow: var(--ombre-menu);
     z-index: 100;
     max-width: min(560px, calc(100% - 32px));
-    animation: fadeDown 0.15s ease;
+    animation: toastIn 0.15s ease;
 }
 .toast.success { background: var(--vert); }
 .toast.error { background: #ce0500; }
