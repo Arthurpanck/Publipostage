@@ -48,7 +48,7 @@ et `viewer@test.fr` (lecteur).
   chaque ouverture, multiplié par le nombre de widgets.
 
 D'où les choix du widget (`template-store.js`) : le modèle est une pièce jointe
-rangée dans la table `Publipostage_Modeles` (données brutes, sans page), une
+rangée dans la table `Publipostage_Modeles_NE_PAS_SUPPRIMER` (données brutes, sans page), une
 ligne par widget repérée par le numéro de sa section ; rangée dans une cellule,
 elle n'est pas purgée. Les options du widget ne gardent que le nom, l'empreinte
 et le numéro du widget : leur changement prévient les autres utilisateurs, et

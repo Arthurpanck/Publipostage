@@ -3,9 +3,9 @@
  * Objet : garder le modèle attaché au widget, pour tous les utilisateurs et
  * dans le temps, sans alourdir l'ouverture du document.
  *
- * Le modèle est une pièce jointe rangée dans la table Publipostage_Modeles
- * (table de données brutes, sans page) : une ligne par widget, repérée par le
- * numéro de sa section. Une pièce jointe rangée dans une cellule n'est pas
+ * Le modèle est une pièce jointe rangée dans la table
+ * Publipostage_Modeles_NE_PAS_SUPPRIMER (données brutes, sans page) : une
+ * ligne par widget, repérée par le numéro de sa section. Une pièce jointe rangée dans une cellule n'est pas
  * purgée par Grist, et seul le widget affiché la télécharge.
  *
  * Les options du widget ne gardent que le nom et l'empreinte du modèle : leur
@@ -23,8 +23,16 @@
  * pièce jointe non rangée (templateId).
  */
 
-const TEMPLATE_TABLE = 'Publipostage_Modeles';
-const TEMPLATE_COLUMNS = { Widget: 'Int', Modele: 'Text', Empreinte: 'Text', Fichier: 'Attachments' };
+// Le nom de la table prévient qu'elle sert au widget ; ses colonnes le
+// rappellent dans leur description.
+const TEMPLATE_TABLE = 'Publipostage_Modeles_NE_PAS_SUPPRIMER';
+const TEMPLATE_WARNING = 'Table gérée par le widget Publipostage : ne pas la supprimer ni la modifier, sinon les modèles des widgets sont perdus.';
+const TEMPLATE_COLUMNS = {
+    Widget: { type: 'Int', description: `Numéro du widget Publipostage qui utilise ce modèle. ${TEMPLATE_WARNING}` },
+    Modele: { type: 'Text', description: `Nom du fichier modèle. ${TEMPLATE_WARNING}` },
+    Empreinte: { type: 'Text', description: `Empreinte du fichier, pour savoir si le modèle a changé. ${TEMPLATE_WARNING}` },
+    Fichier: { type: 'Attachments', description: `Modèle Word ou PDF du widget. ${TEMPLATE_WARNING}` },
+};
 
 // Dernières options reçues de Grist (grist.onOptions) et attentes en cours
 let storeOptions = null;
@@ -196,8 +204,11 @@ function tableActions(columns) {
         actions.push(['AddRawTable', TEMPLATE_TABLE]);
         for (const col of ['A', 'B', 'C']) actions.push(['RemoveColumn', TEMPLATE_TABLE, col]);
     }
-    for (const [colId, type] of Object.entries(TEMPLATE_COLUMNS)) {
-        if (!columns || !columns.has(colId)) actions.push(['AddColumn', TEMPLATE_TABLE, colId, { type, isFormula: false }]);
+    for (const [colId, { type, description }] of Object.entries(TEMPLATE_COLUMNS)) {
+        if (columns && columns.has(colId)) continue;
+        actions.push(['AddColumn', TEMPLATE_TABLE, colId, { type, isFormula: false }]);
+        // AddColumn ignore la description
+        actions.push(['ModifyColumn', TEMPLATE_TABLE, colId, { description }]);
     }
     return actions;
 }

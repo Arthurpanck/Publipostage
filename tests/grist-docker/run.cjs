@@ -26,7 +26,7 @@ async function uploadAs(email, d, file, n = 0) {
 const is = (st, file) => st.name === file.name;
 const reserveStructure = d => G.apply(d, [['AddRecord', '_grist_ACLResources', -1, { tableId: '*', colIds: '*' }],
   ['AddRecord', '_grist_ACLRules', null, { resource: -1, aclFormula: 'user.Access != OWNER', permissionsText: '-S', memo: '' }]]);
-const templateRows = d => G.sql(d.doc, 'select Widget, Modele, Empreinte, Fichier from Publipostage_Modeles').catch(() => null);
+const templateRows = d => G.sql(d.doc, 'select Widget, Modele, Empreinte, Fichier from Publipostage_Modeles_NE_PAS_SUPPRIMER').catch(() => null);
 
 // Modèle à l'ancienne : pièce jointe téléversée + templateId dans les options
 async function legacyDoc(url) {

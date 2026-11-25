@@ -13,9 +13,10 @@ const STRUCTURE = 'Blocked by table structure access rules';
 const tick = (ms = 30) => new Promise(r => setTimeout(r, ms));
 
 // Contrôleur réel (main.js) dans un document Grist simulé : sections de widget
-// (_grist_Views_section), table Publipostage_Modeles, pièces jointes et règles
-// d'accès. Grist renvoie au widget (onOptions) les options de sa propre
-// section quand elles changent. Une action refusée l'est en entier.
+// (_grist_Views_section), table Publipostage_Modeles_NE_PAS_SUPPRIMER,
+// pièces jointes et règles d'accès. Grist renvoie au widget (onOptions) les
+// options de sa propre section quand elles changent. Une action refusée l'est
+// en entier.
 function controller({ sections = [section(7, null)], own = 7, readonly = false, structure = true,
     modeles = null, attachments = {}, rules = [], uploadStatus = 200 } = {}) {
     const events = [];
@@ -48,11 +49,11 @@ function controller({ sections = [section(7, null)], own = 7, readonly = false, 
             docApi: {
                 getAccessToken: async () => ({ baseUrl: BASE, token: 'jeton' }),
                 fetchTable: async t => {
-                    if (t === '_grist_Tables') return { id: [1, 2, ...(doc.columns ? [3] : [])], tableId: ['Donnees', 'Autre', ...(doc.columns ? ['Publipostage_Modeles'] : [])] };
+                    if (t === '_grist_Tables') return { id: [1, 2, ...(doc.columns ? [3] : [])], tableId: ['Donnees', 'Autre', ...(doc.columns ? ['Publipostage_Modeles_NE_PAS_SUPPRIMER'] : [])] };
                     if (t === '_grist_Tables_column') return { id: (doc.columns || []).map((_, i) => i + 1), parentId: (doc.columns || []).map(() => 3), colId: doc.columns || [] };
                     if (t === '_grist_ACLRules') return { id: rules.map((_, i) => i + 1), permissionsText: rules };
-                    if (t === 'Publipostage_Modeles') {
-                        if (!doc.columns) throw new Error('Table not found "Publipostage_Modeles"');
+                    if (t === 'Publipostage_Modeles_NE_PAS_SUPPRIMER') {
+                        if (!doc.columns) throw new Error('Table not found "Publipostage_Modeles_NE_PAS_SUPPRIMER"');
                         const col = c => doc.modeles.map(r => r[c] === undefined ? null : r[c]);
                         return { id: col('id'), Widget: col('Widget'), Modele: col('Modele'), Empreinte: col('Empreinte'), Fichier: col('Fichier') };
                     }
@@ -68,8 +69,9 @@ function controller({ sections = [section(7, null)], own = 7, readonly = false, 
                         if (name === 'AddRawTable') { doc.columns = ['A', 'B', 'C']; doc.modeles = []; doc.rawTable = true; }
                         else if (name === 'RemoveColumn') doc.columns = doc.columns.filter(c => c !== id);
                         else if (name === 'AddColumn') doc.columns.push(id);
-                        else if (table === 'Publipostage_Modeles' && name === 'AddRecord') doc.modeles.push({ id: doc.modeles.length + 1, ...values });
-                        else if (table === 'Publipostage_Modeles') Object.assign(doc.modeles.find(r => r.id === id), values);
+                        else if (name === 'ModifyColumn') (doc.descriptions = doc.descriptions || {})[id] = values.description;
+                        else if (table === 'Publipostage_Modeles_NE_PAS_SUPPRIMER' && name === 'AddRecord') doc.modeles.push({ id: doc.modeles.length + 1, ...values });
+                        else if (table === 'Publipostage_Modeles_NE_PAS_SUPPRIMER') Object.assign(doc.modeles.find(r => r.id === id), values);
                         else {
                             rows.get(id).options = values.options;
                             if (id === own) setTimeout(() => onOptions(widgetOptions(own)), 5);
@@ -137,6 +139,7 @@ test('le modèle est rangé en pièce jointe dans une table sans page ; les opti
     await app.handleTemplateUpload({ name: 'MODELE.DOCX', buffer });
     assert.equal(doc.rawTable, true, 'AddRawTable : pas de nouvelle page');
     assert.deepEqual(doc.columns, ['Widget', 'Modele', 'Empreinte', 'Fichier']);
+    for (const col of doc.columns) assert.match(doc.descriptions[col], /ne pas la supprimer/, `description de ${col}`);
     const row = doc.modeles.find(r => r.Modele === 'MODELE.DOCX');
     assert.equal(row.Widget, 7);
     assert.deepEqual(fileOf(row), buffer);

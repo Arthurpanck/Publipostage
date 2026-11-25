@@ -27,10 +27,11 @@ initUi({
     onDownloadZip: downloadBulk,
 });
 
-// Le modèle est rangé dans la table Publipostage_Modeles ; les options du
-// widget le désignent (voir template-store.js). Grist les envoie au démarrage
-// puis à chaque modification, y compris quand un autre utilisateur change le
-// modèle. Les notifications sont traitées l'une après l'autre.
+// Le modèle est rangé dans la table Publipostage_Modeles_NE_PAS_SUPPRIMER ;
+// les options du widget le désignent (voir template-store.js). Grist les
+// envoie au démarrage puis à chaque modification, y compris quand un autre
+// utilisateur change le modèle. Les notifications sont traitées l'une après
+// l'autre.
 let optionsSeen = false;
 let optionsChain = Promise.resolve();
 grist.onOptions((options) => {
