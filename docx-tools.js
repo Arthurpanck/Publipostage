@@ -136,7 +136,7 @@ function docxTextFiles(zip) {
  * Les noms des balises sont normalisés au passage (normalizeDocxTag).
  */
 function repairDocxXml(xml) {
-    return withTextBoxes(xml, (part) => part.replace(/<w:p(?:\s[^>]*)?>(?:(?!<w:p[ />])[\s\S])*?<\/w:p>/g, (paragraph) => {
+    return withTextBoxes(xml, (part) => part.replace(new RegExp(WORD_PARAGRAPH_SRC, 'g'), (paragraph) => {
         const nodes = [];
         let text = '';
         const parts = /<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>|<w:(?:tab|br|cr|drawing|object)\b[^>]*\/?>/g;
@@ -227,10 +227,8 @@ function transformDottedXml(xml, data) {
     });
 
     // 2) Balises pointées restantes : le paragraphe est répété pour chaque
-    //    enfant (valable hors tableau comme dans une cellule). Le garde-fou
-    //    (?!<w:p[ />]) évite d'enjamber un autre paragraphe, et l'ouverture
-    //    <w:p(?:\s...)?> exclut les paragraphes vides auto-fermés <w:p/>.
-    xml = xml.replace(/<w:p(?:\s[^>]*)?>(?:(?!<w:p[ />])[\s\S])*?<\/w:p>/g, (para) => {
+    //    enfant (valable hors tableau comme dans une cellule).
+    xml = xml.replace(new RegExp(WORD_PARAGRAPH_SRC, 'g'), (para) => {
         const tablesInPara = dottedTablesIn(para).filter(estResolue);
         if (tablesInPara.length === 0) {
             return para;
@@ -265,7 +263,7 @@ function parseFilter(text) {
     const value = m[4].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
         .replace(/&apos;/g, "'").replace(/&amp;/g, '&')
         .trim().replace(/^["“”«»'‘’]\s*/, '').replace(/\s*["“”«»'‘’]$/, '');
-    const display = value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const display = xmlEscape(value);
     return { table: sanitizeKey(m[1]), column: sanitizeKey(m[2]), equal: m[3] === '==', display: display, value: value };
 }
 
@@ -281,7 +279,7 @@ function filterRows(rows, filter) {
     const wanted = compareKey(filter.value);
     return rows.filter((row) => {
         const cell = row[filter.column];
-        const items = Array.isArray(cell) ? (cell[0] === 'L' ? cell.slice(1) : cell) : [cell];
+        const items = Array.isArray(cell) ? decodeList(cell) : [cell];
         return items.some((item) => compareKey(item) === wanted) === filter.equal;
     });
 }
@@ -295,7 +293,7 @@ function filterRows(rows, filter) {
 // syntaxe des filtres est vérifiée.
 function applyFilters(xml, ctx) {
     const scopes = [new Map()];
-    return xml.replace(/<w:tbl[ >]|<\/w:tbl>|<w:p(?:\s[^>]*)?>(?:(?!<w:p[ />])[\s\S])*?<\/w:p>/g, (token) => {
+    return xml.replace(new RegExp('<w:tbl[ >]|<\\/w:tbl>|' + WORD_PARAGRAPH_SRC, 'g'), (token) => {
         if (token.startsWith('<w:tbl')) {
             scopes.push(new Map(scopes[scopes.length - 1]));
             return token;

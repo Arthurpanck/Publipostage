@@ -34,6 +34,17 @@ function fetchTableCached(cache, tableId) {
     return cached(cache, tableId, () => grist.docApi.fetchTable(tableId));
 }
 
+// Numéro d'une table (id de sa ligne dans _grist_Tables, lue par fetchTable)
+const tableRefOf = (tables, tableId) => tables.id[tables.tableId.indexOf(tableId)];
+
+// Contenu d'une pièce jointe du document
+async function downloadAttachment(id) {
+    const token = await grist.docApi.getAccessToken({ readOnly: true });
+    const response = await fetch(`${token.baseUrl}/attachments/${id}/download?auth=${token.token}`);
+    if (!response.ok) throw new Error(`Pièce jointe ${id} : ${response.status}`);
+    return response.arrayBuffer();
+}
+
 const WIDGET_TABLE = Symbol('widgetTable');
 const VIEW_ROWS = Symbol('viewRows');
 const ROW_INDEX = Symbol('rowIndex');
@@ -112,7 +123,7 @@ async function linkedRows(cache, link, record) {
         return tbl.id.flatMap((_, i) => {
             const ref = tbl[link.column][i];
             const linked = link.isList
-                ? Array.isArray(ref) && ref.slice(1).includes(record.id)
+                ? Array.isArray(ref) && decodeList(ref).includes(record.id)
                 : ref === record.id;
             return linked ? [tableRow(tbl, i)] : [];
         });

@@ -193,8 +193,12 @@ vertical des images (`w:position`) : les pilules y paraissent un peu hautes.
 table `Publipostage_Modeles_NE_PAS_SUPPRIMER`, pièces jointes, règles d'accès), que le modèle
 est rangé en pièce jointe dans la table et que les options du widget ne
 gardent que son nom et son empreinte ; qu'un éditeur d'un document qui réserve
-la structure aux propriétaires enregistre son modèle dès que la table existe ;
+la structure aux propriétaires enregistre son modèle dès qu'un propriétaire a
+ouvert le widget (table créée, widget numéroté) ;
 que deux widgets d'une même table sont départagés ; qu'un widget ne télécharge
 que son modèle ; et que les anciens formats (base64 dans les options, pièce
-jointe non rangée) sont repris. Les scénarios contre un vrai Grist sont dans
-`grist-docker/`.
+jointe non rangée) sont repris, l'ancienne pièce jointe sans nouvel envoi. Il
+rejoue aussi les opérations qui se croisent : modèle choisi pendant le
+chargement ou la reprise de l'ancien, table créée au même moment par un autre
+widget, options enregistrées par un autre widget pendant la sonde. Les
+scénarios contre un vrai Grist sont dans `grist-docker/`.

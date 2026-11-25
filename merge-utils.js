@@ -5,6 +5,11 @@ function sanitizeKey(value) {
         .replace(/[^a-zA-Z0-9_]+/g, '_').replace(/^_+/, '').toLowerCase();
 }
 
+// Paragraphe Word complet, sans enjamber le paragraphe suivant ; l'ouverture
+// <w:p(?:\s...)?> exclut les paragraphes vides auto-fermés <w:p/>. Source à
+// compiler par chaque appelant (new RegExp), qui y ajoute ses alternatives.
+const WORD_PARAGRAPH_SRC = '<w:p(?:\\s[^>]*)?>(?:(?!<w:p[ />])[\\s\\S])*?<\\/w:p>';
+
 // Identifiant de ligne et colonnes techniques de Grist, jamais publipostés
 const TECHNICAL_COLUMN = /^(?:id$|__|manualSort|gristHelper_)/;
 

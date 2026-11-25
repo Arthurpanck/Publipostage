@@ -143,6 +143,28 @@ function uiSetWarnings(tags, notes) {
     uiRender();
 }
 
+// Prépare l'aperçu du document hors de la page et renvoie la fonction qui
+// l'affiche : le contrôleur ne l'appelle que pour l'aperçu le plus récent.
+let uiPreviewUrl = null;
+async function uiPreparePreview(blob, type) {
+    const page = document.createElement('div');
+    if (type === 'docx') {
+        await docx.renderAsync(blob, page, null, { className: "docx_viewer", inWrapper: true, ignoreWidth: false });
+    }
+    return () => {
+        // PDF : affiché par le navigateur ; l'adresse de l'aperçu précédent est libérée
+        if (uiPreviewUrl) URL.revokeObjectURL(uiPreviewUrl);
+        uiPreviewUrl = type === 'pdf' ? URL.createObjectURL(blob) : null;
+        if (uiPreviewUrl) {
+            const frame = document.createElement('iframe');
+            frame.src = uiPreviewUrl;
+            page.replaceChildren(frame);
+        }
+        $('preview-container').replaceChildren(...page.childNodes);
+        uiShowPreview(true);
+    };
+}
+
 function uiShowPreview(visible) {
     $('previewScroll').hidden = !visible;
     $('previewEmpty').hidden = visible;

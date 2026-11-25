@@ -92,6 +92,19 @@ const SCENARIOS = {
     const r = await G.check(OWNER, d), e = await G.check(EDITOR, d);
     return [/enregistré/.test(ed.toast) && is(r, B) && is(e, B), `« ${ed.toast} » · propriétaire : ${r.name} · éditeur : ${e.name}`];
   },
+  'Structure réservée, trois widgets sur la page : une seule table créée, chaque éditeur enregistre': async url => {
+    const d = await G.createDoc(url, { widgets: 3 }); await reserveStructure(d);
+    await G.check(OWNER, d); // les trois widgets préparent la table en même temps
+    const tables = (await G.sql(d.doc, "select tableId from _grist_Tables where tableId like 'Publipostage_Modeles%'")).map(t => t.tableId);
+    const s = await G.session(EDITOR); await G.openDoc(s, d);
+    const sent = []; for (const [i, f] of [A, B, A].entries()) sent.push((await G.upload(s, f, i)).toast);
+    await s.ctx.close();
+    const v = await G.session(VIEWER); await G.openDoc(v, d);
+    const seen = []; for (let i = 0; i < 3; i++) seen.push((await G.templateIn(v, i)).name);
+    await v.ctx.close();
+    return [tables.length === 1 && sent.every(t => /enregistré/.test(t)) && seen.join() === [A, B, A].map(f => f.name).join(),
+      `tables : ${tables.join(', ')} · envois de l'éditeur : ${sent.filter(t => /enregistré/.test(t)).length}/3 · lecteur : ${seen.join(' / ')}`];
+  },
   'Migration dans un document à structure réservée : faite à l\'ouverture par le propriétaire': async url => {
     const d = await legacyDoc(url); await reserveStructure(d);
     const ed = await G.check(EDITOR, d); const [still] = await G.savedOptions(d);

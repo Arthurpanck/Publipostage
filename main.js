@@ -2,10 +2,10 @@
  * MAIN CONTROLLER
  * Version : 2.0
  * Objet : événements Grist, orchestration de la génération (docx/pdf) et
- * pilotage de la vue (ui.js). Ne manipule pas le DOM directement.
+ * pilotage de la vue (ui.js). Ne manipule pas le DOM.
  */
 
-let state = {
+const state = {
     currentRecord: null,
     allRecords: [],
     templateBuffer: null,
@@ -39,34 +39,29 @@ grist.onOptions((options) => {
     const first = !optionsSeen;
     optionsSeen = true;
     optionsChain = optionsChain.then(() => applyOptions(options, first)).catch(e => console.error(e));
-    if (first) prepareTableForEditors();
+    if (first) prepareTemplateTable();
 });
 
-grist.onRecord(async (record, mappings) => {
+// Ligne sélectionnée (onRecord) ou lignes du widget (onRecords) : une liaison
+// ou un filtre peut changer les lignes sans déplacer le curseur.
+function receiveRows(change, mappings) {
     state.filenameColumn = mappings?.filename || '';
-    state.currentRecord = record;
+    Object.assign(state, change);
     updateActionsState();
-
-    // MAJ de la preview si on clique sur un enregistrement
-    if (state.currentRecord && state.templateBuffer) {
-        await updatePreview();
-    }
-}, { includeColumns: 'normal' });
-
-grist.onRecords(async (records, mappings) => {
-    state.filenameColumn = mappings?.filename || '';
-    state.allRecords = records;
-    updateActionsState();
-    // Une liaison ou un filtre peut changer les lignes sans déplacer le curseur.
-    if (state.currentRecord && state.templateBuffer) await updatePreview();
-}, { includeColumns: 'normal' });
+    if (state.currentRecord && state.templateBuffer) return updatePreview();
+}
+grist.onRecord((record, mappings) => receiveRows({ currentRecord: record }, mappings), { includeColumns: 'normal' });
+grist.onRecords((records, mappings) => receiveRows({ allRecords: records }, mappings), { includeColumns: 'normal' });
 
 function getTemplateType(name) {
     const extension = name.split('.').pop().toLowerCase();
     return extension === 'docx' || extension === 'pdf' ? extension : null;
 }
 
-// Upload du Template (fichier choisi via la modale ou la roue crantée)
+// Upload du Template (fichier choisi via la modale ou la roue crantée).
+// Tant qu'il est en cours, les notifications d'options sont ignorées
+// (applyOptions) : le modèle choisi ne doit pas être remplacé par l'ancien.
+let uploading = 0;
 async function handleTemplateUpload(file) {
     const type = getTemplateType(file.name);
     if (!type) {
@@ -78,6 +73,7 @@ async function handleTemplateUpload(file) {
 
     uiToast("Enregistrement du modèle...", "normal");
 
+    uploading++;
     try {
         const buffer = await readFileAsBuffer(file);
         // Valider avant de remplacer le modèle enregistré.
@@ -97,7 +93,7 @@ async function handleTemplateUpload(file) {
         } else if (status === 'owners') {
             uiPersistBanner("Modèle utilisé pour cette session seulement : ce document réserve la modification de sa structure aux propriétaires. Un propriétaire doit ouvrir ce widget une fois ; ensuite, les éditeurs pourront enregistrer leurs modèles.");
         } else if (status === 'section') {
-            uiPersistBanner("Modèle utilisé pour cette session seulement : plusieurs widgets Publipostage de cette table n'ont pas encore de modèle, et ce document réserve la modification de sa structure aux propriétaires. Demandez à un propriétaire de charger un premier modèle dans ce widget.");
+            uiPersistBanner("Modèle utilisé pour cette session seulement : plusieurs widgets Publipostage de cette table ont les mêmes réglages (widgets neufs ou dupliqués), et ce document réserve la modification de sa structure aux propriétaires. Demandez à un propriétaire de charger un modèle dans ce widget.");
         }
     } catch (err) {
         console.error(err);
@@ -105,6 +101,8 @@ async function handleTemplateUpload(file) {
         if (state.templateName === file.name) {
             uiPersistBanner("Modèle utilisé pour cette session seulement : son enregistrement dans le document a échoué.");
         }
+    } finally {
+        uploading--;
     }
 }
 
@@ -185,32 +183,20 @@ async function dispatchGeneration(received, batch) {
     }
 }
 
-// Prévisualisation du document pour la ligne sélectionnée
+// Prévisualisation du document pour la ligne sélectionnée. onRecord et
+// onRecords peuvent la relancer coup sur coup : le rendu est préparé hors de
+// la page (uiPreparePreview) et seul l'aperçu le plus récent est affiché.
 let previewRun = 0;
 async function updatePreview() {
-    const container = document.getElementById('preview-container');
-    if (!container) {
-        return;
-    }
-
-    // onRecord et onRecords peuvent relancer l'aperçu coup sur coup : le rendu
-    // se fait hors du DOM et seul l'aperçu le plus récent est affiché.
     const run = ++previewRun;
     const batch = newBatch();
     try {
         const blob = await dispatchGeneration(state.currentRecord, batch);
-        const page = document.createElement('div');
-        if (state.templateType === 'docx') {
-            await docx.renderAsync(blob, page, null, { className: "docx_viewer", inWrapper: true, ignoreWidth: false });
-        } else if (state.templateType === 'pdf') {
-            const pdfUrl = URL.createObjectURL(blob);
-            page.innerHTML = `<iframe src="${pdfUrl}"></iframe>`;
-        }
+        const show = await uiPreparePreview(blob, state.templateType);
         if (run !== previewRun) {
             return;
         }
-        container.replaceChildren(...page.childNodes);
-        uiShowPreview(true);
+        show();
         showWarnings(batch);
     } catch (e) {
         if (run !== previewRun) {
@@ -234,17 +220,21 @@ function updateActionsState() {
 }
 
 // Charge le modèle désigné par les options. Sans modèle, la modale
-// d'instructions s'ouvre au premier chargement.
+// d'instructions s'ouvre au premier chargement. Un modèle choisi par
+// l'utilisateur pendant la lecture garde la priorité.
 let missingShown = null;
 async function applyOptions(options, first) {
+    if (uploading) return;
+    const loaded = state.templateHash;
     let template;
     try {
-        template = await readTemplate(options, hash => !!hash && hash === state.templateHash);
+        template = await readTemplate(options, hash => !!hash && hash === loaded);
     } catch (e) {
         console.warn("Erreur chargement", e);
         uiToast("Impossible de charger le modèle : " + e.message, "error");
         return;
     }
+    if (uploading || state.templateHash !== loaded) return;
     if (!template) {
         if (first && !state.templateBuffer) uiOpenModal();
         return;
@@ -252,11 +242,11 @@ async function applyOptions(options, first) {
     if (template.missing) {
         if (missingShown === template.name || state.templateBuffer) return;
         missingShown = template.name;
-        uiToast(`Le modèle « ${template.name} » n'est plus disponible dans ce document (copie sans données, table ${TEMPLATE_TABLE} supprimée…) : chargez-le à nouveau.`, "error");
+        uiToast(`Le modèle « ${template.name} » n'est plus disponible dans ce document (copie sans données, table ${TEMPLATE_TABLE} supprimée ou masquée par une règle d'accès…) : chargez-le à nouveau.`, "error");
         uiOpenModal();
         return;
     }
-    if (!template.buffer || template.hash === state.templateHash) return;
+    if (!template.buffer) return; // déjà chargé
     const type = getTemplateType(template.name);
     if (!type) {
         uiToast('Format du modèle enregistré non supporté.', 'error');

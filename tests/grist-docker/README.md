@@ -55,8 +55,10 @@ et le numéro du widget : leur changement prévient les autres utilisateurs, et
 l'envoi (fichier + options) est une seule action, annulable par Ctrl+Z.
 Écrire dans la table ne demande que le droit de modifier les données : quand
 la structure est réservée aux propriétaires, la table est préparée à
-l'ouverture du widget par un propriétaire, puis les éditeurs y enregistrent
-leurs modèles. La purge `removeUnused?expiredonly=0` simule les 7 jours.
+l'ouverture du widget par un propriétaire, qui inscrit aussi dans les options
+de chaque widget son numéro (sans lui, un éditeur ne peut pas départager des
+widgets neufs d'une même table) ; les éditeurs y enregistrent ensuite leurs
+modèles. La purge `removeUnused?expiredonly=0` simule les 7 jours.
 
 ## Résultats
 
@@ -75,13 +77,15 @@ Version précédente (modèle en base64 dans les options) : scénarios ok, sauf
 pour un éditeur quand la structure est réservée aux propriétaires, mais
 ouverture du document très lente (ci-dessous).
 
-Version actuelle : tous les scénarios de `run.cjs` passent (26), dont un
+Version actuelle : tous les scénarios de `run.cjs` passent (27), dont un
 éditeur qui charge un modèle dans un document à structure réservée, une fois
 le widget ouvert par le propriétaire. Changement de comportement : une copie
 « comme modèle » (sans données) perd les modèles, le widget dit lequel
 recharger. Cinq widgets ont chacun leur modèle (trois sur la même page), et
 le widget ne limite plus la taille du modèle (20 Mo testés) : seule compte
-la limite des pièces jointes du serveur Grist.
+la limite des pièces jointes du serveur Grist. Trois widgets neufs d'une même
+page, ouverts par le propriétaire d'un document à structure réservée, ne
+créent qu'une table, et un éditeur enregistre ensuite un modèle dans chacun.
 
 Vitesse, débit limité à 20 Mbit/s (Chromium), 10 widgets avec un modèle de
 2 Mo chacun :

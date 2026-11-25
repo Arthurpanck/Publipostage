@@ -77,13 +77,13 @@ async function loadRenderInfo(batch) {
 // { colonne normalisée: spec } pour une table
 async function tableSpec(batch, meta, tableId) {
     const { cols, tables } = meta;
-    const tableRef = tables.id[tables.tableId.indexOf(tableId)];
+    const tableRef = tableRefOf(tables, tableId);
     const byRowId = new Map(cols.id.map((id, i) => [id, i]));
     const spec = {};
     for (let i = 0; i < cols.id.length; i++) {
         if (cols.parentId[i] !== tableRef) continue;
         const colId = cols.colId[i];
-        if (/^(?:manualSort|gristHelper_)/.test(colId)) continue;
+        if (TECHNICAL_COLUMN.test(colId)) continue;
         const [, kind, target] = /^(Ref|RefList):(.+)$/.exec(cols.type[i]) || [];
         const opts = parseWidgetOptions(cols.widgetOptions[i]);
         const s = { type: kind || cols.type[i], label: cols.label ? cols.label[i] : colId, opts };
@@ -108,7 +108,7 @@ async function refDisplay(batch, meta, tableId, visibleIndex) {
     tbl.id.forEach((id, i) => {
         const raw = visibleCol ? tbl[visibleCol][i] : id;
         const text = isDateSpec(dateSpec) ? formatDate(raw, dateSpec, meta)
-            : Array.isArray(raw) ? raw.slice(raw[0] === 'L' ? 1 : 0).join(', ') : raw;
+            : Array.isArray(raw) ? decodeList(raw).join(', ') : raw;
         map.set(id, { text: text == null ? '' : String(text), style: null });
     });
     return map;
@@ -269,7 +269,7 @@ function renderer(ctx, { value, spec, format, args, tag, lookup }) {
 
 function listValue(value) {
     if (value == null || value === '') return [];
-    if (Array.isArray(value)) return value[0] === 'L' ? value.slice(1) : value;
+    if (Array.isArray(value)) return decodeList(value);
     return [value];
 }
 
@@ -772,13 +772,6 @@ async function loadAttachments(batch, data, info) {
     }));
 }
 
-async function downloadAttachment(id) {
-    const token = await grist.docApi.getAccessToken({ readOnly: true });
-    const response = await fetch(`${token.baseUrl}/attachments/${id}/download?auth=${token.token}`);
-    if (!response.ok) throw new Error(`Pièce jointe ${id} : ${response.status}`);
-    return response.arrayBuffer();
-}
-
 const IMAGE_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', bmp: 'image/bmp' };
 
 // Images ajoutées au DOCX : word/media, relations de la partie, types de contenu.
@@ -877,7 +870,7 @@ function applyRenders(zip, registry) {
 
 // Paragraphe ne contenant qu'un marqueur à rendu bloc : remplacé par le bloc
 function replaceBlocks(xml, registry, env) {
-    return xml.replace(/<w:p(?:\s[^>]*)?>(?:(?!<w:p[ />])[\s\S])*?<\/w:p>(<\/w:tc>)?/g, (paragraph, cellEnd, offset) => {
+    return xml.replace(new RegExp(WORD_PARAGRAPH_SRC + '(<\\/w:tc>)?', 'g'), (paragraph, cellEnd, offset) => {
         const texts = [...paragraph.matchAll(/<w:t(?:\s[^>]*)?>([^<]*)<\/w:t>/g)].map(m => m[1]).join('');
         const m = /^\s*(\d+)\s*$/.exec(texts);
         const render = m && registry[+m[1]];
