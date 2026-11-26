@@ -178,9 +178,9 @@ test('deux widgets neufs sur la même table : seul le sien reçoit le modèle', 
     await app.handleTemplateUpload({ name: 'a.docx', buffer: docx(app) });
     assert.equal(saved(7).templateName, 'a.docx');
     assert.deepEqual(doc.modeles.map(r => r.Widget), [7]);
-    assert.equal(rows.get(5).options, autre.options, "l'autre widget, sondé puis rétabli, retrouve ses options");
-    assert.equal(saved(6), null);
-    assert.equal(saved(8), null);
+    assert.deepEqual(saved(5), { templateWidget: 5 }, "l'autre widget de la table reçoit son numéro");
+    assert.equal(rows.get(6).options, autreTable.options, 'seul sur sa table : inchangé');
+    assert.equal(rows.get(8).options, autreUrl.options, 'autre widget personnalisé : inchangé');
 });
 
 test('lecture seule : rien n\'est écrit, le modèle sert pour la session', async () => {
@@ -227,7 +227,7 @@ test('structure réservée : à l\'ouverture par un propriétaire, la table est 
     start(); await tick();
     assert.deepEqual(doc.columns, ['Widget', 'Modele', 'Empreinte', 'Fichier']);
     assert.equal(doc.rawTable, true);
-    assert.deepEqual(saved(7), { templateWidget: 7 }, 'le widget est numéroté');
+    assert.equal(saved(7), null, 'seul sur sa table : pas besoin de numéro');
 });
 
 test('structure réservée, widgets neufs sur la même table : numérotés par le propriétaire, l\'éditeur enregistre', async () => {
@@ -235,8 +235,8 @@ test('structure réservée, widgets neufs sur la même table : numérotés par l
     const owner = controller({ sections, rules: ['-S'] });
     owner.start(); await tick(100);
     assert.deepEqual(owner.saved(7), { templateWidget: 7 });
-    assert.equal(owner.saved(5), null, 'les autres widgets, sondés, retrouvent leurs options');
-    assert.equal(owner.saved(9), null);
+    assert.deepEqual(owner.saved(5), { templateWidget: 5 });
+    assert.deepEqual(owner.saved(9), { templateWidget: 9 });
     // L'éditeur ouvre le document tel que le propriétaire l'a laissé
     const editor = controller({ structure: false, modeles: [], sections: [5, 7, 9].map(id => ({ id, tableRef: 1, parentKey: 'custom', options: owner.rows.get(id).options })) });
     editor.start(); await tick();
@@ -304,7 +304,7 @@ test('copie sans données (table vidée) : le widget dit quel modèle recharger'
 test('modèle en base64 dans les options (version précédente) : utilisé, puis rangé dans la table et retiré des options', async () => {
     const buffer = new Uint8Array([80, 75, 3, 4, 1, 2, 3]);
     const { state, saved, doc, fileOf, start } = controller({ sections: [section(7, { templateName: 'm.docx', templateHash: 'abc', templateData: Buffer.from(buffer).toString('base64') })] });
-    start(); await tick();
+    start(); await tick(500);
     assert.equal(state().templateName, 'm.docx');
     assert.deepEqual(new Uint8Array(state().templateBuffer), buffer);
     assert.deepEqual(saved(7), { templateName: 'm.docx', templateHash: 'abc', templateWidget: 7 });
@@ -320,7 +320,7 @@ test('modèle en base64 chez un lecteur : utilisé, rien n\'est écrit', async (
 
 test('ancien format (pièce jointe non rangée) : chargé, rangé dans la table et retiré des options', async () => {
     const { saved, state, doc, events, start } = controller({ sections: [section(7, { templateId: 42, templateName: 'ancien.docx' })], attachments: { 42: [1, 2, 3] } });
-    start(); await tick();
+    start(); await tick(500);
     assert.equal(state().templateName, 'ancien.docx');
     assert.equal(saved(7).templateId, undefined);
     assert.equal(saved(7).templateName, 'ancien.docx');
@@ -412,17 +412,30 @@ test('table créée au même moment par un autre widget : l\'envoi réessaie et 
     assert.deepEqual(toasts(events).at(-1), 'success:Modèle enregistré dans le document');
 });
 
-test('sonde : les options qu\'un autre widget enregistre entre-temps ne sont pas écrasées', async () => {
-    const pointeur = { templateName: 'autre.docx', templateHash: 'hx', templateWidget: 5 };
-    const { app, saved, start } = controller({ sections: [section(5, null), section(7, null)],
-        afterApply: (actions, { rows, widgetOptions }) => {
-            // Dès que la section 5 est marquée, son widget enregistre son propre modèle
-            if ((widgetOptions(5) || {}).sondePublipostage) rows.get(5).options = section(5, pointeur).options;
-        } });
-    start(); await tick();
-    await app.handleTemplateUpload({ name: 'a.docx', buffer: docx(app) });
-    assert.deepEqual(saved(5), pointeur);
-    assert.equal(saved(7).templateName, 'a.docx');
+test('options remises à zéro par Grist (widget re-sélectionné) : chaque widget retrouve son modèle', async () => {
+    const { app, saved, state, events, start } = controller({ sections: [section(5, null), section(7, null), section(9, { templateWidget: 9 })],
+        modeles: [{ Widget: 5, Modele: 'cinq.docx', Empreinte: 'h5', Fichier: ['L', 51] }, { Widget: 7, Modele: 'sept.docx', Empreinte: 'h7', Fichier: ['L', 71] }] });
+    start(); await tick(600);
+    assert.deepEqual(saved(5), { templateName: 'cinq.docx', templateHash: 'h5', templateWidget: 5 });
+    assert.deepEqual(saved(7), { templateName: 'sept.docx', templateHash: 'h7', templateWidget: 7 });
+    assert.deepEqual(saved(9), { templateWidget: 9 }, 'widget sans modèle : inchangé');
+    assert.deepEqual(events.filter(e => /^téléchargé/.test(e)), ['téléchargé:71'], 'le widget lit son modèle, pas celui du voisin');
+    assert.equal(events.includes('modale'), false);
+});
+
+test('options remises à zéro, lecteur : rien n\'est écrit ; après le passage d\'un éditeur, il retrouve son modèle', async () => {
+    const modeles = [{ Widget: 5, Modele: 'cinq.docx', Empreinte: 'h5', Fichier: ['L', 51] }, { Widget: 7, Modele: 'sept.docx', Empreinte: 'h7', Fichier: ['L', 71] }];
+    const attachments = { 71: [...docx(loadApp())] };
+    const viewer = controller({ readonly: true, sections: [section(5, null), section(7, null)], modeles, attachments });
+    viewer.start(); await tick(100);
+    assert.equal(viewer.state().templateName, null);
+    assert.deepEqual(writes(viewer.events), []);
+    // Un éditeur ouvre l'autre widget (5) : les options des deux sont rétablies
+    const editor = controller({ own: 5, sections: [section(5, null), section(7, null)], modeles, attachments });
+    editor.start(); await tick(100);
+    const after = controller({ readonly: true, modeles, attachments, sections: [5, 7].map(id => ({ id, tableRef: 1, parentKey: 'custom', options: editor.rows.get(id).options })) });
+    after.start(); await tick(100);
+    assert.equal(after.state().templateName, 'sept.docx');
 });
 
 test('colonne de la table supprimée : réparée à l\'ouverture du widget', async () => {
@@ -438,8 +451,23 @@ test('lecture des tables impossible à l\'ouverture : aucune erreur non traitée
     const onRejection = e => rejections.push(e);
     process.on('unhandledRejection', onRejection);
     app.grist.docApi.fetchTable = async () => { throw new Error('connexion perdue'); };
-    start(); await tick();
+    start(); await tick(3300);
     process.off('unhandledRejection', onRejection);
     assert.deepEqual(rejections, []);
-    assert.equal(events.includes('modale'), true);
+    assert.match(toasts(events).at(-1), /^error:Impossible de charger le modèle : connexion perdue/);
+    assert.equal(events.includes('modale'), false, 'la lecture a échoué : rien ne dit que le modèle manque');
+});
+
+test('lecture interrompue à l\'ouverture : retentée, le modèle est chargé', async () => {
+    const { app, state, events, start } = controller({ sections: [section(7, { templateName: 'sept.docx', templateHash: 'h7', templateWidget: 7 })],
+        modeles: [{ Widget: 7, Modele: 'sept.docx', Empreinte: 'h7', Fichier: ['L', 71] }], attachments: { 71: [...docx(loadApp())] } });
+    const fetchTable = app.grist.docApi.fetchTable;
+    let failures = 2;
+    app.grist.docApi.fetchTable = async t => {
+        if (t === 'Publipostage_Modeles_NE_PAS_SUPPRIMER' && failures-- > 0) throw new Error('connexion perdue');
+        return fetchTable(t);
+    };
+    start(); await tick(1300);
+    assert.equal(state().templateName, 'sept.docx');
+    assert.deepEqual(toasts(events), []);
 });

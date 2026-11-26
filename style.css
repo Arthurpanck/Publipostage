@@ -197,6 +197,7 @@ code {
     justify-content: flex-end;
     border-top: 1px solid var(--bordure);
 }
+.modal-version { margin-right: auto; font-size: 11px; color: var(--texte-2); }
 
 /* ── En-tête ─────────────────────────────────────────────────────── */
 /* overflow:visible obligatoire : les menus déroulants (roue crantée,

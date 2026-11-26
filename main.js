@@ -31,14 +31,19 @@ initUi({
 // les options du widget le désignent (voir template-store.js). Grist les
 // envoie au démarrage puis à chaque modification, y compris quand un autre
 // utilisateur change le modèle. Les notifications sont traitées l'une après
-// l'autre.
+// l'autre. Avant la première lecture, les options des widgets du document
+// sont remises d'aplomb (healBeforeReading), ce qui peut modifier les nôtres :
+// la lecture utilise les dernières reçues.
 let optionsSeen = false;
 let optionsChain = Promise.resolve();
 grist.onOptions((options) => {
     noteOptions(options);
     const first = !optionsSeen;
     optionsSeen = true;
-    optionsChain = optionsChain.then(() => applyOptions(options, first)).catch(e => console.error(e));
+    const apply = first
+        ? healBeforeReading().then(() => applyOptions(storeOptions, true))
+        : optionsChain.then(() => applyOptions(options, false));
+    optionsChain = apply.catch(e => console.error(e));
     if (first) prepareTemplateTable();
 });
 
@@ -57,6 +62,11 @@ function getTemplateType(name) {
     const extension = name.split('.').pop().toLowerCase();
     return extension === 'docx' || extension === 'pdf' ? extension : null;
 }
+
+// Tant que l'accès complet n'a pas été accordé au widget (il vient d'être
+// ajouté ou re-sélectionné), Grist refuse toute lecture et toute écriture.
+const NO_ACCESS = "Ce widget a besoin de l'accès complet au document pour lire et enregistrer son modèle : ouvrez le panneau de configuration du widget (colonne de droite de Grist) et cliquez sur « Accepter ».";
+const isAccessDenied = e => /access not granted/i.test(String(e && e.message));
 
 // Upload du Template (fichier choisi via la modale ou la roue crantée).
 // Tant qu'il est en cours, les notifications d'options sont ignorées
@@ -97,6 +107,11 @@ async function handleTemplateUpload(file) {
         }
     } catch (err) {
         console.error(err);
+        if (isAccessDenied(err)) {
+            uiToast("Modèle non enregistré : accès au document non accordé", "error");
+            uiPersistBanner(NO_ACCESS);
+            return;
+        }
         uiToast("Erreur lors de la sauvegarde : " + err.message, "error");
         if (state.templateName === file.name) {
             uiPersistBanner("Modèle utilisé pour cette session seulement : son enregistrement dans le document a échoué.");
@@ -228,10 +243,11 @@ async function applyOptions(options, first) {
     const loaded = state.templateHash;
     let template;
     try {
-        template = await readTemplate(options, hash => !!hash && hash === loaded);
+        template = await readTemplateRetrying(options, hash => !!hash && hash === loaded);
     } catch (e) {
         console.warn("Erreur chargement", e);
-        uiToast("Impossible de charger le modèle : " + e.message, "error");
+        if (isAccessDenied(e)) uiPersistBanner(NO_ACCESS);
+        else uiToast("Impossible de charger le modèle : " + e.message, "error");
         return;
     }
     if (uploading || state.templateHash !== loaded) return;
@@ -254,6 +270,19 @@ async function applyOptions(options, first) {
     }
     updateTemplateState(template.buffer, template.name, type, template.hash);
     uiPersistBanner(null);
+}
+
+// Une lecture qui échoue (réseau, Grist occupé) est retentée avant d'être
+// signalée : le modèle est toujours dans le document.
+async function readTemplateRetrying(options, skip) {
+    for (let attempt = 0; ; attempt++) {
+        try {
+            return await readTemplate(options, skip);
+        } catch (e) {
+            if (attempt === 2 || isAccessDenied(e)) throw e;
+            await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+        }
+    }
 }
 
 function readFileAsBuffer(file) {

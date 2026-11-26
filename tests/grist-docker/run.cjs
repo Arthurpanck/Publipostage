@@ -28,17 +28,23 @@ const reserveStructure = d => G.apply(d, [['AddRecord', '_grist_ACLResources', -
   ['AddRecord', '_grist_ACLRules', null, { resource: -1, aclFormula: 'user.Access != OWNER', permissionsText: '-S', memo: '' }]]);
 const templateRows = d => G.sql(d.doc, 'select Widget, Modele, Empreinte, Fichier from Publipostage_Modeles_NE_PAS_SUPPRIMER').catch(() => null);
 
+// Remplace les options enregistrées d'un widget (comme Grist quand on
+// re-sélectionne le widget : options remises à zéro)
+async function setOptions(d, sectionId, widgetOptions) {
+  const [row] = await G.sql(d.doc, `select options from _grist_Views_section where id=${sectionId}`);
+  const options = JSON.parse(row.options), view = JSON.parse(options.customView);
+  view.widgetOptions = widgetOptions;
+  options.customView = JSON.stringify(view);
+  await G.apply(d, [['UpdateRecord', '_grist_Views_section', sectionId, { options: JSON.stringify(options) }]]);
+}
+
 // Modèle à l'ancienne : pièce jointe téléversée + templateId dans les options
 async function legacyDoc(url) {
   const d = await G.createDoc(url);
   const form = new FormData();
   form.append('upload', new Blob([A.buffer]), A.name);
   const [id] = await G.api(OWNER, 'POST', `/api/docs/${d.doc}/attachments`, form);
-  const [row] = await G.sql(d.doc, `select options from _grist_Views_section where id=${d.sections[0]}`);
-  const options = JSON.parse(row.options), view = JSON.parse(options.customView);
-  view.widgetOptions = { templateId: id, templateName: A.name };
-  options.customView = JSON.stringify(view);
-  await G.apply(d, [['UpdateRecord', '_grist_Views_section', d.sections[0], { options: JSON.stringify(options) }]]);
+  await setOptions(d, d.sections[0], { templateId: id, templateName: A.name });
   return d;
 }
 
@@ -115,11 +121,7 @@ const SCENARIOS = {
   },
   'Migration : modèle en base64 dans les options (version précédente)': async url => {
     const d = await G.createDoc(url);
-    const [row] = await G.sql(d.doc, `select options from _grist_Views_section where id=${d.sections[0]}`);
-    const options = JSON.parse(row.options), view = JSON.parse(options.customView);
-    view.widgetOptions = { templateName: A.name, templateHash: 'ancien', templateData: A.buffer.toString('base64') };
-    options.customView = JSON.stringify(view);
-    await G.apply(d, [['UpdateRecord', '_grist_Views_section', d.sections[0], { options: JSON.stringify(options) }]]);
+    await setOptions(d, d.sections[0], { templateName: A.name, templateHash: 'ancien', templateData: A.buffer.toString('base64') });
     const v0 = await G.check(VIEWER, d); const [still] = await G.savedOptions(d);
     const ed = await G.check(EDITOR, d); const [after] = await G.savedOptions(d);
     await purge(d); const v = await G.check(VIEWER, d);
@@ -185,6 +187,28 @@ const SCENARIOS = {
     const expected = [...files, ...files].map((f, i) => `${f.name}:${(i % 5) + 1}`);
     return [JSON.stringify(seen) === JSON.stringify(expected) && rows.length === 5 && new Set(rows.map(r => r.Widget)).size === 5,
       `${seen.slice(0, 5).join(' / ')} (éditeur, idem lecteur) · lignes de la table : ${rows.length}`];
+  },
+  'Options remises à zéro par Grist (widgets re-sélectionnés) : chaque widget retrouve son modèle': async url => {
+    const d = await G.createDoc(url, { widgets: 2 });
+    const s = await G.session(OWNER); await G.openDoc(s, d);
+    await G.upload(s, A, 0); await G.upload(s, B, 1); await s.ctx.close();
+    for (const id of d.sections) await setOptions(d, id, null);
+    await G.check(EDITOR, d); // une ouverture par quelqu'un qui peut écrire rétablit les options des deux widgets
+    const v = await G.session(VIEWER); await G.openDoc(v, d);
+    const r0 = await G.templateIn(v, 0), r1 = await G.templateIn(v, 1); await v.ctx.close();
+    const saved = await G.savedOptions(d);
+    return [is(r0, A) && is(r1, B) && saved.every((o, i) => o && o.templateWidget === d.sections[i]),
+      `lecteur : ${r0.name} / ${r1.name} · options : ${saved.map(o => o && o.templateName).join(' / ')}`];
+  },
+  'Widget dupliqué sur une autre page : il garde son modèle quand celui de l\'original est remplacé': async url => {
+    const d = await G.createDoc(url); await uploadAs(OWNER, d, A);
+    const copy = await G.addWidget(d, url, 0);
+    await setOptions(copy, copy.sections[0], (await G.savedOptions(d))[0]);
+    const first = await G.check(EDITOR, copy);
+    await uploadAs(OWNER, d, B);
+    const original = await G.check(VIEWER, d), kept = await G.check(VIEWER, copy), rows = await templateRows(d);
+    return [is(first, A) && is(original, B) && is(kept, A) && rows.length === 2,
+      `copie : ${first.name} · après remplacement, original : ${original.name}, copie : ${kept.name} · lignes : ${rows.length}`];
   },
   'Remplacement du modèle': async url => {
     const d = await G.createDoc(url); await uploadAs(OWNER, d, A); await uploadAs(OWNER, d, B);

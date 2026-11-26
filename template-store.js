@@ -14,11 +14,18 @@
  * rétablit le modèle précédent. Le fichier lui-même n'y est plus : Grist
  * envoie les options de tous les widgets à chaque ouverture du document.
  *
+ * Chaque widget porte aussi son numéro dans ses options (templateWidget) :
+ * c'est ce qui lui permet de se reconnaître parmi les widgets de la même
+ * table. Tout utilisateur qui peut écrire les options remet d'aplomb, à
+ * l'ouverture, celles de tous les widgets Publipostage du document (voir
+ * healSections) : numéro manquant, options remises à zéro par Grist (widget
+ * re-sélectionné, adresse changée), widget ou page dupliqués.
+ *
  * Écrire les options demande le droit de modifier la structure ; ranger le
  * fichier dans la table demande seulement celui de modifier les données. Un
  * éditeur d'un document qui réserve la structure aux propriétaires enregistre
- * donc son modèle dans la table, dès qu'un propriétaire a ouvert le widget
- * (table créée, widget numéroté : voir prepareTemplateTable).
+ * donc son modèle dans la table, dès qu'un propriétaire a ouvert un widget
+ * (table créée par prepareTemplateTable, widgets numérotés par healSections).
  *
  * Anciens formats repris (puis retirés des options par un utilisateur qui
  * peut les écrire) : modèle en base64 dans les options (templateData) et
@@ -36,24 +43,15 @@ const TEMPLATE_COLUMNS = {
     Fichier: { type: 'Attachments', description: `Modèle Word ou PDF du widget. ${TEMPLATE_WARNING}` },
 };
 
-// Dernières options reçues de Grist (grist.onOptions) et attentes en cours
+// Dernières options reçues de Grist (grist.onOptions) et section du widget
 let storeOptions = null;
-let storeWaiters = [];
 let storeSection = null;
 
 function noteOptions(options) {
     storeOptions = options || null;
-    storeWaiters = storeWaiters.filter(w => !w.test(storeOptions) || (w.resolve(true), false));
 }
 
-function waitForOptions(test, timeoutMs) {
-    if (test(storeOptions)) return Promise.resolve(true);
-    return new Promise(resolve => {
-        const waiter = { test, resolve };
-        storeWaiters.push(waiter);
-        setTimeout(() => { storeWaiters = storeWaiters.filter(w => w !== waiter); resolve(false); }, timeoutMs);
-    });
-}
+const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 /* ── Fichier ────────────────────────────────────────────────────── */
 
@@ -70,10 +68,17 @@ async function templateHash(buffer) {
 }
 
 // Options du widget pour un modèle : nom, empreinte et numéro du widget (qui
-// départage deux widgets de la même table, même après une duplication)
+// départage deux widgets de la même table, même après une duplication).
+// sondePublipostage : marque laissée par une ancienne version.
 function pointerOptions(previous, name, hash, widget) {
     const { templateId, templateData, sondePublipostage, ...rest } = previous || {};
     return { ...rest, templateName: name, templateHash: hash, templateWidget: widget };
+}
+
+// Options d'un widget sans modèle enregistré : son numéro seulement
+function numberedOptions(previous, widget) {
+    const { sondePublipostage, ...rest } = previous || {};
+    return { ...rest, templateWidget: widget };
 }
 
 // Modèle d'un ancien format encore présent dans les options
@@ -121,26 +126,37 @@ function parseSection(table, i) {
     return { id: table.id[i], options, view };
 }
 
-function samePage(url) {
+// Adresse d'une page, sans protocole, paramètres, index.html ni / final
+function pageKey(url) {
+    if (!url) return null;
     try {
-        const a = new URL(url, location.href);
-        return a.origin + a.pathname === location.origin + location.pathname;
+        const page = new URL(url, location.href);
+        return page.host + page.pathname.replace(/index\.html$/, '').replace(/\/+$/, '');
     } catch (e) {
-        return false;
+        return null;
     }
 }
 
-// Sections personnalisées de la table du widget qui pourraient être celle-ci
-async function candidateSections() {
-    const tableId = await grist.getSelectedTableId();
-    const tables = await grist.docApi.fetchTable('_grist_Tables');
+const OWN_OPTIONS = ['templateName', 'templateHash', 'templateWidget', 'templateId', 'templateData', 'sondePublipostage'];
+
+// Widgets Publipostage du document : sections personnalisées qui affichent
+// cette page (sameTable : sur la table de ce widget). Si aucune adresse
+// enregistrée n'est la nôtre (redirection, catalogue de widgets…), ce sont
+// les sections de la table du widget sans options ou avec les nôtres.
+async function widgetSections() {
+    const [tableId, tables, sections] = await Promise.all([
+        grist.getSelectedTableId(),
+        grist.docApi.fetchTable('_grist_Tables'),
+        grist.docApi.fetchTable('_grist_Views_section'),
+    ]);
     const tableRef = tableRefOf(tables, tableId);
-    const sections = await grist.docApi.fetchTable('_grist_Views_section');
     const custom = sections.id.map((_, i) => i)
-        .filter(i => sections.parentKey[i] === 'custom' && sections.tableRef[i] === tableRef)
-        .map(i => parseSection(sections, i));
-    const ours = custom.filter(s => samePage(s.view.url || (s.view.widgetDef && s.view.widgetDef.url) || ''));
-    return ours.length ? ours : custom;
+        .filter(i => sections.parentKey[i] === 'custom')
+        .map(i => ({ ...parseSection(sections, i), tableRef: sections.tableRef[i], sameTable: sections.tableRef[i] === tableRef }));
+    const here = pageKey(location.href);
+    const ours = custom.filter(s => pageKey(s.view.url || (s.view.widgetDef && s.view.widgetDef.url)) === here);
+    if (ours.some(s => s.sameTable)) return ours;
+    return custom.filter(s => s.sameTable && Object.keys(s.view.widgetOptions || {}).every(k => OWN_OPTIONS.includes(k)));
 }
 
 // Section telle qu'enregistrée dans le document
@@ -155,41 +171,71 @@ function sectionAction(section, widgetOptions) {
     return ['UpdateRecord', '_grist_Views_section', section.id, { options: JSON.stringify({ ...section.options, customView }) }];
 }
 
-// Retrouve la section du widget : ses options enregistrées sont celles que
-// Grist nous a transmises. Si plusieurs sections ont les mêmes (widgets neufs
-// ou dupliqués sur la même table), elles sont sondées : il faut pouvoir
-// écrire les options, d'où { probe: false } quand on se contente de lire.
-async function ownSection({ probe = true } = {}) {
-    if (storeSection) return storeSection;
-    const candidates = (await candidateSections()).filter(s => sameOptions(s.view.widgetOptions, storeOptions));
-    if (candidates.length === 1) return (storeSection = candidates[0].id);
-    if (!probe || !candidates.length) return null;
-    return (storeSection = await probeSections(candidates));
+// La section du widget est celle de sa table dont les options enregistrées
+// sont celles que Grist nous a transmises, si elle est la seule.
+function sectionWithOurOptions(sections) {
+    const same = sections.filter(s => s.sameTable && sameOptions(s.view.widgetOptions, storeOptions));
+    return same.length === 1 ? same[0].id : null;
 }
 
-// Sonde : chaque section candidate reçoit une marque dans ses options, et
-// Grist renvoie au widget (onOptions) celle de sa propre section. Les marques
-// encore en place sont ensuite retirées ; une section dont le widget a
-// enregistré ses propres options entre-temps n'est pas touchée.
-async function probeSections(candidates) {
-    const marks = new Map(candidates.map(section => [Math.random().toString(36).slice(2), section]));
-    const marked = (section, mark) => sectionAction(section, { ...(section.view.widgetOptions || {}), sondePublipostage: mark });
-    await grist.docApi.applyUserActions([...marks].map(([mark, section]) => marked(section, mark)));
-    let own = null;
-    await waitForOptions(o => !!(own = o && marks.get(o.sondePublipostage)), 2500);
-
-    const sections = await grist.docApi.fetchTable('_grist_Views_section');
-    const restore = [];
-    for (const [mark, section] of marks) {
-        const current = parseSection(sections, sections.id.indexOf(section.id));
-        if ((current.view.widgetOptions || {}).sondePublipostage === mark) {
-            restore.push(sectionAction(current, section.view.widgetOptions || null));
-        }
+// Retrouve la section du widget, avant d'y écrire. Les options des widgets
+// du document sont d'abord remises d'aplomb (healSections) : chacun porte
+// alors son numéro, et Grist nous transmet le nôtre. Grist transmet les
+// options un instant après les avoir enregistrées (les nôtres ont pu être
+// modifiées par un autre widget) : la réponse n'est retenue que si elles
+// n'ont pas changé 300 ms plus tard.
+// { heal: false } pour se contenter de lire : la réponse n'est pas gardée,
+// et des widgets aux options identiques ne sont pas départagés.
+async function ownSection({ heal = !isReadonly() } = {}) {
+    if (storeSection) return storeSection;
+    if (!heal) return sectionWithOurOptions(await widgetSections());
+    const healed = await healSections() !== 'denied';
+    for (let attempt = 0; attempt < 10; attempt++) {
+        const options = storeOptions;
+        const own = sectionWithOurOptions(await widgetSections());
+        if (!own && !healed) break;
+        await pause(300);
+        if (own && storeOptions === options) return (storeSection = own);
     }
-    if (restore.length) await grist.docApi.applyUserActions(restore);
-    if (!own) throw new Error('Section du widget introuvable');
-    await waitForOptions(o => !o || !o.sondePublipostage, 2500);
-    return own.id;
+    return null;
+}
+
+// Remet d'aplomb les options des widgets Publipostage du document, d'après
+// la table des modèles :
+//  - un widget qui a une ligne dans la table la désigne : Grist remet les
+//    options à zéro quand on re-sélectionne le widget ou change son adresse,
+//    et un éditeur peut avoir rangé un modèle sans pouvoir écrire les options ;
+//  - un widget dupliqué porte le numéro de son original : il reçoit le sien
+//    (et sa propre ligne quand il est ouvert, voir readTemplate) ;
+//  - des widgets d'une même table aux options identiques (widgets neufs)
+//    reçoivent leur numéro, celui de leur section.
+// Renvoie 'changed' si des options ont été écrites, 'same' s'il n'y avait
+// rien à faire, 'denied' si elles n'ont pas pu l'être (structure réservée aux
+// propriétaires).
+let healDenied = false;
+async function healSections() {
+    const [sections, rows] = await Promise.all([widgetSections(), templateRows()]);
+    const twinKey = s => `${s.tableRef}:${stableJson(s.view.widgetOptions || null)}`;
+    const twins = new Map();
+    for (const section of sections) twins.set(twinKey(section), (twins.get(twinKey(section)) || 0) + 1);
+    const actions = [];
+    for (const section of sections) {
+        const options = section.view.widgetOptions || {};
+        const row = rowFor(rows, section.id, options);
+        const numbered = options.templateWidget !== undefined || twins.get(twinKey(section)) > 1;
+        const wanted = row ? pointerOptions(options, row.name, row.hash, section.id)
+            : numbered ? numberedOptions(options, section.id) : options;
+        if (!sameOptions(wanted, options)) actions.push(sectionAction(section, wanted));
+    }
+    if (!actions.length) return 'same';
+    try {
+        await grist.docApi.applyUserActions(actions);
+        return 'changed';
+    } catch (e) {
+        if (!isStructureDenied(e)) throw e;
+        healDenied = true;
+        return 'denied';
+    }
 }
 
 /* ── Table des modèles ──────────────────────────────────────────── */
@@ -220,12 +266,15 @@ function tableActions(columns) {
 }
 
 // Lignes de la table des modèles : [{ rowId, widget, name, hash, attachmentId }]
+// Aucune si la table n'existe pas (ou est masquée par une règle d'accès) ;
+// si elle existe, un échec de lecture est une erreur, pas un modèle perdu.
 async function templateRows() {
     let tbl;
     try {
         tbl = await grist.docApi.fetchTable(TEMPLATE_TABLE);
     } catch (e) {
-        return []; // table absente (ou illisible)
+        if (await templateTableColumns()) throw e;
+        return [];
     }
     const col = name => tbl[name] || [];
     return tbl.id.map((rowId, i) => {
@@ -234,6 +283,9 @@ async function templateRows() {
         return { rowId, widget: col('Widget')[i], name: col('Modele')[i], hash: col('Empreinte')[i], attachmentId: ids[ids.length - 1] };
     }).filter(r => r.attachmentId && r.name);
 }
+
+const rowFields = (widget, { name, hash, attachmentId }) =>
+    ({ Widget: widget, Modele: name, Empreinte: hash, Fichier: ['L', attachmentId] });
 
 // Ligne du widget : celle de sa section ; à défaut, celle qui porte
 // l'empreinte de ses options (widget dupliqué, section non départagée).
@@ -275,30 +327,23 @@ async function ensureTemplateTable() {
 // À l'ouverture du widget, par un utilisateur qui en a le droit :
 //  - une table incomplète (colonne supprimée) est réparée ;
 //  - dans un document qui réserve la structure aux propriétaires, la table
-//    est créée et le widget reçoit son numéro dans ses options, pour que les
-//    éditeurs puissent ensuite enregistrer leurs modèles (voir numberWidget).
+//    est créée, pour que les éditeurs puissent y enregistrer leurs modèles.
 async function prepareTemplateTable() {
     if (isReadonly()) return;
     try {
-        const reserved = await structureReserved();
-        if (reserved || await templateTableColumns()) await ensureTemplateTable();
-        if (reserved) await enqueueWrite(numberWidget);
+        if (await structureReserved() || await templateTableColumns()) await ensureTemplateTable();
     } catch (e) {
-        console.warn('Widget non préparé', e);
+        console.warn('Table des modèles non préparée', e);
     }
 }
 
-// Sans le droit d'écrire les options, un éditeur ne peut pas départager des
-// widgets aux réglages identiques (voir probeSections). Le propriétaire
-// inscrit donc dans les options de chaque widget son numéro, qui le distingue
-// ensuite des autres.
-async function numberWidget() {
-    if (storeOptions && storeOptions.templateWidget) return;
-    const section = await readSection(await ownSection());
-    const options = section.view.widgetOptions || {};
-    if (options.templateWidget !== section.id) {
-        await grist.docApi.applyUserActions([sectionAction(section, { ...options, templateWidget: section.id })]);
-    }
+// Avant la première lecture du modèle, par un utilisateur qui peut écrire :
+// les options des widgets du document sont remises d'aplomb (healSections).
+// Si elles ont changé, Grist nous transmet les nôtres un instant plus tard.
+function healBeforeReading() {
+    if (isReadonly()) return Promise.resolve();
+    return enqueueWrite(async () => { if (await healSections() === 'changed') await pause(300); })
+        .catch(e => console.warn('Options des widgets non vérifiées', e));
 }
 
 /* ── Enregistrement et lecture ──────────────────────────────────── */
@@ -347,14 +392,11 @@ function migrate(template) {
 // (attachmentId) ou à téléverser (buffer).
 async function writeTemplate({ name, hash, buffer, attachmentId }, { migration = false } = {}) {
     if (isReadonly()) return 'readonly';
-    let sectionId;
-    try {
-        sectionId = await ownSection();
-    } catch (e) {
-        if (isStructureDenied(e)) return 'section';
-        throw e;
+    const sectionId = await ownSection();
+    if (!sectionId) {
+        if (healDenied) return 'section';
+        throw new Error('Section du widget introuvable');
     }
-    if (!sectionId) throw new Error('Section du widget introuvable');
 
     const own = (await templateRows()).find(r => r.widget === sectionId);
     // Reprise : la ligne déjà enregistrée pour ce widget fait foi
@@ -364,7 +406,7 @@ async function writeTemplate({ name, hash, buffer, attachmentId }, { migration =
         // La table d'abord : si elle ne peut pas être préparée, rien n'est envoyé
         if (!await ensureTemplateTable()) return 'owners';
         if (!attachmentId) attachmentId = await uploadTemplateFile(buffer, name);
-        const fields = { Widget: sectionId, Modele: name, Empreinte: hash, Fichier: ['L', attachmentId] };
+        const fields = rowFields(sectionId, { name, hash, attachmentId });
         data.push(own ? ['UpdateRecord', TEMPLATE_TABLE, own.rowId, fields] : ['AddRecord', TEMPLATE_TABLE, null, fields]);
     }
     const section = await readSection(sectionId);
@@ -391,13 +433,13 @@ async function writeTemplate({ name, hash, buffer, attachmentId }, { migration =
  */
 async function readTemplate(options, skip = () => false) {
     const [sectionId, rows] = await Promise.all([
-        ownSection({ probe: false }).catch(() => null),
+        ownSection({ heal: false }).catch(() => null),
         templateRows(),
     ]);
     const row = rowFor(rows, sectionId, options);
     if (row) {
         const buffer = skip(row.hash) ? null : await downloadAttachment(row.attachmentId);
-        if (hasLegacy(options) || row.widget !== sectionId) migrate(row);
+        if (hasLegacy(options) || (sectionId && row.widget !== sectionId)) migrate(row);
         return { name: row.name, hash: row.hash, buffer };
     }
     const legacy = legacyFromOptions(options);
